@@ -15,7 +15,7 @@ import { mockStocks } from '../data/mockData';
 import { StockItem } from '../types';
 
 export default function MobileApp() {
-  const [activePage, setActivePage] = useState<MobilePage>('市场');
+  const [activePage, setActivePage] = useState<MobilePage>('智询');
   const [selectedStock, setSelectedStock] = useState<StockItem>(mockStocks[0]);
   const [showDetail, setShowDetail] = useState(false);
 

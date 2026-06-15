@@ -441,7 +441,7 @@ export default function AiChatPage({ stocks }: Props) {
   };
 
   const handleTagClick = (tag: string) => {
-    toggleArr(setSelectedStocks, tag);
+    setSelectedStocks((prev) => prev[0] === tag ? [] : [tag]);
   };
 
   const handleReviewSelect = (review: ReviewOption) => {
@@ -505,7 +505,7 @@ export default function AiChatPage({ stocks }: Props) {
         </div>
         <div className="flex-1 overflow-auto scrollbar-thin p-3" style={{ display: 'flex', flexDirection: 'column', gap: '40px' }}>
           <div>
-            <h4 className="text-neutral text-xs mb-2 font-medium">股票筛选</h4>
+            <h4 className="text-neutral text-xs mb-2 font-medium">单只股票</h4>
             <div className="relative mb-2">
               <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
               <input
@@ -532,7 +532,7 @@ export default function AiChatPage({ stocks }: Props) {
           </div>
 
           <div>
-            <h4 className="text-neutral text-xs mb-2 font-medium">行业分析（申万）</h4>
+            <h4 className="text-neutral text-xs mb-2 font-medium">行业（万申）</h4>
             <div className="flex gap-1 flex-wrap">
               {industries.map((ind) => (
                 <button
@@ -575,7 +575,7 @@ export default function AiChatPage({ stocks }: Props) {
               {holdingStocks.map((h) => (
                 <span
                   key={h.证券代码}
-                  onClick={() => toggleArr(setSelectedStocks, h.证券名称)}
+                  onClick={() => handleTagClick(h.证券名称)}
                   className={`px-2 py-1 text-[10px] rounded cursor-pointer transition-colors ${
                     selectedStocks.includes(h.证券名称)
                       ? 'bg-blue-600 text-white'

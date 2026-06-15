@@ -20,7 +20,7 @@ import { SideNavItem } from './components/SideNav';
 
 function App() {
   const [selectedStock, setSelectedStock] = useState<StockItem>(mockStocks[0]);
-  const [activePage, setActivePage] = useState<SideNavItem>('市场');
+  const [activePage, setActivePage] = useState<SideNavItem>('智询');
   const [showMarketAi, setShowMarketAi] = useState(false);
   const [marketStocks, setMarketStocks] = useState<StockItem[]>(mockStocks);
 
