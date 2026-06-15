@@ -8,6 +8,9 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 export default defineConfig({
   plugins: [react()],
   base: '/caitong-finance/',
+  server: {
+    allowedHosts: ['.ngrok-free.dev'],
+  },
   build: {
     rollupOptions: {
       input: {

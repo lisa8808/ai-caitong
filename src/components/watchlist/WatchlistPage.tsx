@@ -3,7 +3,6 @@ import { Plus, X, Search } from 'lucide-react';
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { holdingStocks, watchlistStocks as initialWatchlist, watchDetail, fundFlowData, minuteChartData } from '../../data/watchlistData';
 import { WatchStock, HoldingStock } from '../../types/watchlist';
-import { mockIndices } from '../../data/mockData';
 import MultiStockView from './MultiStockView';
 
 const columns = ['序号', '证券代码', '证券名称', 'K线', '现价', '涨幅%', '涨跌', '涨速%', '换手%', '自选日', '自选价格', '自选收益%', '最高', '最低'];
@@ -14,8 +13,8 @@ export default function WatchlistPage() {
   const [selectedHolding, setSelectedHolding] = useState<HoldingStock>(holdingStocks[0]);
   const [watchlist, setWatchlist] = useState<WatchStock[]>(initialWatchlist);
   const [activeChart, setActiveChart] = useState('分时');
-  const [globalTab, setGlobalTab] = useState('自选股');
-  const [subTab, setSubTab] = useState('自选股列表');
+  const [globalTab, setGlobalTab] = useState('自选');
+  const [subTab, setSubTab] = useState('股票列表');
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -69,23 +68,23 @@ export default function WatchlistPage() {
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="bg-primary-nav border-b border-gray-700">
         <div className="flex items-center px-3 py-1.5 gap-1">
-          {['自选股', '持股'].map((t) => (
-            <button key={t} onClick={() => { setGlobalTab(t); setSubTab('自选股列表'); }} className={`px-3 py-1 text-xs rounded ${globalTab===t?'bg-gray-600 text-white':'text-secondary hover:text-white'}`}>{t}</button>
+          {['自选', '持仓'].map((t) => (
+            <button key={t} onClick={() => { setGlobalTab(t); setSubTab('股票列表'); }} className={`px-3 py-1 text-xs rounded ${globalTab===t?'bg-gray-600 text-white':'text-secondary hover:text-white'}`}>{t}</button>
           ))}
-          <button className="ml-auto text-secondary hover:text-white"><Plus size={14} /></button>
         </div>
-        {globalTab === '自选股' && (
+        {globalTab === '自选' && (
           <div className="flex items-center px-3 py-1 gap-1 border-t border-gray-700/50">
-            {['自选股列表', '多股同列'].map((t) => (
+            {['股票列表', '多股同列'].map((t) => (
               <button key={t} onClick={() => setSubTab(t)} className={`px-3 py-1 text-xs rounded ${subTab===t?'bg-gray-600 text-white':'text-secondary hover:text-white'}`}>{t}</button>
             ))}
+            <button className="ml-auto text-secondary hover:text-white" onClick={() => setShowAddModal(true)}><Plus size={14} /></button>
           </div>
         )}
       </div>
 
       {subTab === '多股同列' ? (
         <MultiStockView />
-      ) : globalTab === '持股' ? (
+      ) : globalTab === '持仓' ? (
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="grid grid-cols-5 gap-3 px-4 py-3 bg-primary-nav border-b border-gray-700">
             <div className="text-center"><div className="text-secondary text-[10px]">总市值</div><div className="text-white text-sm font-mono font-semibold">{holdingStocks.reduce((s,h)=>s+h.市值,0).toLocaleString()}</div></div>
@@ -112,10 +111,6 @@ export default function WatchlistPage() {
         <>
           <div className="flex-1 flex overflow-hidden">
             <div className="flex flex-col flex-1 overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-1.5 bg-primary-nav border-b border-gray-700">
-                <span className="text-white text-xs font-semibold">自选股({watchlist.length})</span>
-                <button className="text-secondary hover:text-white" onClick={() => setShowAddModal(true)}><Plus size={14} /></button>
-              </div>
               <div className="flex-1 overflow-auto scrollbar-thin">
                 <table className="w-full text-[11px]">
                   <thead className="sticky top-0 bg-primary-nav z-10"><tr className="text-secondary">{columns.map(c=><th key={c} className="py-1.5 px-1.5 text-left font-normal whitespace-nowrap">{c}</th>)}</tr></thead>
@@ -154,9 +149,6 @@ export default function WatchlistPage() {
                 </div>
               </div>
             </div>
-          </div>
-          <div className="h-7 bg-primary-nav border-t border-gray-700 flex items-center px-3 gap-5 overflow-x-auto scrollbar-thin flex-shrink-0">
-            {mockIndices.map(idx=>(<div key={idx.name} className="flex items-center gap-1.5 whitespace-nowrap text-[11px]"><span className="text-secondary">{idx.name}</span><span className="text-neutral font-mono">{idx.value.toFixed(2)}</span><span className={`font-mono ${idx.change>=0?'text-up':'text-down'}`}>{idx.change>=0?'+':''}{idx.change.toFixed(2)}</span><span className={`font-mono ${idx.changePercent>=0?'text-up':'text-down'}`}>{idx.changePercent>=0?'+':''}{idx.changePercent.toFixed(2)}%</span><span className="text-secondary">{idx.volume}</span></div>))}
           </div>
         </>
       )}

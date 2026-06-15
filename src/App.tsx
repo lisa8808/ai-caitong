@@ -67,7 +67,7 @@ function App() {
         ) : activePage === '账户' ? (
           <AccountPage />
         ) : activePage === '智询' ? (
-          <AiChatPage />
+          <AiChatPage stocks={marketStocks.length !== mockStocks.length || marketStocks[0]?.证券代码 !== mockStocks[0]?.证券代码 ? marketStocks : undefined} />
         ) : (
           <div className="flex-1 flex items-center justify-center text-secondary text-sm">
             {activePage}模块开发中...

@@ -795,7 +795,6 @@ export default function AiChatPage({ stocks }: Props) {
                     key={rec.id || idx}
                     onClick={() => {
                       if (rec.status === 'generating') return;
-                      setSelectedReport(rec);
                       if (rec.content) {
                         printReviewPdf(rec.summary, rec.content);
                       }
