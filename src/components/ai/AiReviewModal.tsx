@@ -1,13 +1,20 @@
-interface Props {
-  onClose: () => void;
-  onSelect: (prompt: string) => void;
+export interface ReviewOption {
+  title: '板块热点' | '市场复盘' | '个股复盘' | '操作复盘';
+  desc: string;
+  prompt: string;
+  style: 'research' | 'trading' | 'mixed';
 }
 
-const cards = [
-  { title: '板块热点', desc: '分析涨幅前三板块', prompt: '帮我总结今天板块热点表现，分析涨幅前3的板块，包括涨跌幅、成交额和龙头个股' },
-  { title: '市场复盘', desc: '指数走势与资金流向', prompt: '帮我分析今日市场整体表现，包括三大指数走势、涨跌家数、北向资金流向和成交量变化' },
-  { title: '个股复盘', desc: '涨幅前五个股分析', prompt: '帮我复盘今天涨幅前5的个股，分析它们上涨的原因、技术形态和资金流向' },
-  { title: '操作复盘', desc: '交易操作回顾优化', prompt: '帮我总结今日操作情况，分析合理操作与改进建议' },
+interface Props {
+  onClose: () => void;
+  onSelect: (review: ReviewOption) => void;
+}
+
+const cards: ReviewOption[] = [
+  { title: '板块热点', desc: '分析涨幅前三板块', prompt: '帮我总结今天板块热点表现，分析涨幅前3的板块，包括涨跌幅、成交额和龙头个股', style: 'research' },
+  { title: '市场复盘', desc: '指数走势与资金流向', prompt: '帮我分析今日市场整体表现，包括三大指数走势、涨跌家数、北向资金流向和成交量变化', style: 'research' },
+  { title: '个股复盘', desc: '涨幅前五个股分析', prompt: '帮我复盘今天涨幅前5的个股，分析它们上涨的原因、技术形态和资金流向', style: 'mixed' },
+  { title: '操作复盘', desc: '交易操作回顾优化', prompt: '帮我总结今日操作情况，分析合理操作与改进建议', style: 'trading' },
 ];
 
 export default function AiReviewModal({ onClose, onSelect }: Props) {
@@ -24,7 +31,7 @@ export default function AiReviewModal({ onClose, onSelect }: Props) {
           {cards.map((card) => (
             <div
               key={card.title}
-              onClick={() => onSelect(card.prompt)}
+              onClick={() => onSelect(card)}
               className="p-2.5 rounded-lg bg-[#242730] border border-gray-700/50 cursor-pointer transition-colors hover:border-blue-500/50 hover:bg-[#2a3040] group"
             >
               <div className="text-xs text-white font-medium mb-0.5 group-hover:text-blue-400 transition-colors">{card.title}</div>

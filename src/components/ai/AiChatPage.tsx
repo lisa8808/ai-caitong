@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo, Dispatch, SetStateAction } from 'react';
 import { Search, Send, Bot, User, BarChart3, TrendingUp, Activity, ClipboardList, Target, ShieldAlert, Loader2, FileText, X } from 'lucide-react';
-import AiReviewModal from './AiReviewModal';
+import AiReviewModal, { ReviewOption } from './AiReviewModal';
+import { StockItem } from '../../types';
+import { holdingStocks } from '../../data/watchlistData';
 
-const hotTags = ['宁德时代', '贵州茅台', '比亚迪', '隆基绿能', '中信证券'];
+const hotTags = ['立讯精密', '药明康德', '美的集团', '海康威视', '中信证券'];
 const industries = ['IT设备', '专用机械', '汽车零部件', '电子器件', '生物医药', '新材料', '新能源', '半导体', '消费电子', '通信设备', '软件开发', '化工'];
 const sectors = ['新能源车', '人工智能', '光伏', '军工', '芯片', '5G', '云计算', '储能', '机器人', '低空经济', '钠电池', '算力租赁'];
 
@@ -12,19 +14,20 @@ interface Message {
   time: string;
 }
 
-const analysisStocks = [
-  { 代码: '600519', 名称: '贵州茅台', PE: 25.3, 增长: '+15.2%' },
-  { 代码: '300750', 名称: '宁德时代', PE: 18.7, 增长: '+42.5%' },
-  { 代码: '002594', 名称: '比亚迪', PE: 22.1, 增长: '+38.6%' },
-  { 代码: '601012', 名称: '隆基绿能', PE: 12.5, 增长: '+25.8%' },
-  { 代码: '688981', 名称: '中芯国际', PE: 35.6, 增长: '+18.3%' },
-  { 代码: '002475', 名称: '立讯精密', PE: 16.8, 增长: '+32.1%' },
-];
-
 interface ReportRecord {
+  id?: string;
   summary: string;
   time: string;
   content: string;
+  status?: 'generating' | 'done';
+}
+
+interface ResultColumn {
+  key: string;
+  title: string;
+  align?: 'left' | 'right';
+  render: (stock: StockItem) => string;
+  className?: (stock: StockItem) => string;
 }
 
 const initialRecords: ReportRecord[] = [
@@ -60,15 +63,304 @@ function now() {
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function AiChatPage() {
-  const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null);
-  const [selectedSector, setSelectedSector] = useState<string | null>(null);
-  const [selectedStock, setSelectedStock] = useState<string | null>(null);
+function getStockSeed(stock: StockItem) {
+  return `${stock.证券代码}${stock.证券名称}`.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
+function getResultColumns(query: string): ResultColumn[] {
+  const normalized = query.toLowerCase();
+  const columns: ResultColumn[] = [
+    { key: 'code', title: '股票代码', render: (stock) => stock.证券代码 },
+    { key: 'name', title: '股票名称', render: (stock) => stock.证券名称 },
+    { key: 'price', title: '最新', align: 'right', render: (stock) => stock.现价.toFixed(2) },
+    {
+      key: 'change',
+      title: '今日涨幅',
+      align: 'right',
+      render: (stock) => `${stock.涨幅 >= 0 ? '+' : ''}${stock.涨幅.toFixed(2)}%`,
+      className: (stock) => stock.涨幅 >= 0 ? 'text-up' : 'text-down',
+    },
+  ];
+
+  if (normalized.includes('pe') || query.includes('市盈率')) {
+    columns.push({
+      key: 'pe',
+      title: 'PE',
+      align: 'right',
+      render: (stock) => (8 + (getStockSeed(stock) % 320) / 10).toFixed(1),
+    });
+  }
+
+  if (normalized.includes('ma') || query.includes('均线') || query.includes('移动平均')) {
+    columns.push(
+      {
+        key: 'ma5',
+        title: 'MA5',
+        align: 'right',
+        render: (stock) => (stock.现价 * (0.97 + (getStockSeed(stock) % 7) / 100)).toFixed(2),
+      },
+      {
+        key: 'ma10',
+        title: 'MA10',
+        align: 'right',
+        render: (stock) => (stock.现价 * (0.95 + (getStockSeed(stock) % 9) / 100)).toFixed(2),
+      },
+    );
+  }
+
+  return columns;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatSelectedScope(stocks: string[], industries: string[], sectors: string[]) {
+  const parts = [
+    industries.length > 0 && `行业：${industries.join('、')}`,
+    sectors.length > 0 && `概念：${sectors.join('、')}`,
+    stocks.length > 0 && `标的：${stocks.join('、')}`,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join('；') : '未选择特定范围，基于全市场样例数据生成';
+}
+
+function buildReviewReport(review: ReviewOption, displayStocks: StockItem[], scope: string) {
+  const date = new Date().toLocaleDateString('zh-CN');
+  const styleText = review.style === 'trading' ? '实战复盘' : review.style === 'mixed' ? '投研归档 + 交易观察' : '投研归档';
+  const topStocks = displayStocks.slice(0, 5);
+  const stockRows = topStocks.map((stock) => `| ${stock.证券代码} | ${stock.证券名称} | ${stock.现价.toFixed(2)} | ${stock.涨幅 >= 0 ? '+' : ''}${stock.涨幅.toFixed(2)}% |`).join('\n');
+
+  const sections: Record<ReviewOption['title'], string> = {
+    板块热点: `## 三、热点板块分析\n- 今日主线集中在高弹性成长方向，需重点观察成交额能否继续放大。\n- 领涨板块若能保持龙头股强度和板块内扩散，短线持续性更强。\n- 若明日冲高回落且成交缩量，说明资金更偏向轮动而非趋势主升。\n\n## 四、龙头与扩散\n${stockRows || '| - | - | - | - |'}\n\n## 五、明日观察\n- 观察龙头个股是否继续强于板块指数。\n- 观察板块成交额是否维持在高位。\n- 观察低位补涨个股是否扩散。`,
+    市场复盘: `## 三、市场结构分析\n- 指数层面重点关注量价配合，放量上涨更利于趋势延续。\n- 情绪层面重点看涨跌家数、连板高度和高位股反馈。\n- 资金层面重点看北向资金、主力资金是否与热点方向一致。\n\n## 四、样例关注标的\n${stockRows || '| - | - | - | - |'}\n\n## 五、明日观察\n- 指数能否在关键位置放量站稳。\n- 热点主线是否继续集中。\n- 高位题材是否出现明显亏钱效应。`,
+    个股复盘: `## 三、个股表现分析\n${topStocks.map((stock) => `### ${stock.证券名称}（${stock.证券代码}）\n- 今日表现：现价 ${stock.现价.toFixed(2)}，涨幅 ${stock.涨幅 >= 0 ? '+' : ''}${stock.涨幅.toFixed(2)}%。\n- 复盘重点：结合所属题材、资金承接和均线位置判断持续性。\n- 明日观察：关注开盘强弱、量能变化和关键支撑位。`).join('\n\n') || '暂无选股结果，建议补充个股列表后生成更完整复盘。'}\n\n## 四、风险提示\n- 个股波动受题材、业绩、流动性和市场情绪共同影响。\n- 若放量冲高后回落，需要警惕短线资金兑现。`,
+    操作复盘: `## 三、周期交易数据总览（技能结果量化）\n| 模块 | 指标 | 本期数据 | 技能解读 |\n| --- | --- | --- | --- |\n| 账户核心数据 | 期初资金 / 期末资金 / 当期盈亏 / 收益率 | 未提供 | 需补充后才能判断收益是否来自体系能力。 |\n| 交易行为数据 | 总交易笔数 / 盈利笔数 / 亏损笔数 / 胜率 | 未提供 | 建议按笔记录，避免只凭主观感受复盘。 |\n| 风控波动数据 | 最大回撤 / 单笔最大盈亏 / 平均盈亏比 | 未提供 | 缺少该项会导致无法定位风险控制能力。 |\n| 交易效率数据 | 空仓天数 / 频繁交易天数 / 合规交易占比 / 情绪化交易占比 | 未提供 | 后续应重点量化体系内交易比例。 |\n\n## 四、当期市场认知技能复盘（底层研判能力）\n### 1. 大盘周期研判技能\n- 当期大盘周期定义：未提供完整指数和量能数据，暂按当前样例市场归为结构性行情观察。\n- 个人研判结果：待补充交易前对指数、量能、情绪周期的判断。\n- 研判偏差分析：重点检查是否存在把震荡行情当趋势行情、忽视指数破位风险、错判量能趋势等问题。\n\n### 2. 题材主线甄别技能\n- 市场真实主线、支线、退潮题材：待补充当日主线和退潮方向。\n- 个人题材取舍动作：需记录是否聚焦主线，是否参与杂毛题材。\n- 技能短板：重点检查主线聚焦能力、龙头辨识度和题材持续性判断。\n\n### 3. 市场情绪解读技能\n- 核心情绪指标：连板高度、炸板率、涨跌家数、资金流向均待补充。\n- 个人情绪应对策略：需复盘是否在高位激进、低位恐慌或混沌行情盲目出手。\n\n## 五、单笔交易技能拆解（核心落地复盘）\n### （一）盈利交易｜正向技能固化\n- 标的名称 + 代码：待补充。\n- 选股技能：检查是否来自主线题材、趋势突破或超跌低吸，是否有技术面、基本面、资金面或政策面依据。\n- 择时技能：拆解入场节点是否在情绪回暖、板块启动或分歧低吸；出场是否在压力到位、题材分歧或情绪退潮。\n- 仓位技能：判断仓位是否匹配行情确定性，是否存在赚小钱轻仓的问题。\n- 操作纪律：确认是否严格执行体系规则，无情绪化操作。\n- 核心可复用技能：把有效动作沉淀为下一期可复用 SOP。\n\n### （二）亏损交易｜负向技能纠错\n- 标的名称 + 代码：待补充。\n- 亏损根源技能定位：认知研判失误 / 选股技能缺陷 / 择时能力不足 / 仓位管理失控 / 纪律执行失效 / 情绪化操作。\n- 认知层面：是否错判市场周期、题材强度、资金情绪。\n- 选股层面：是否买入非主流杂毛、无板块联动、无资金抱团、逻辑不支撑标的。\n- 择时层面：是否逆势操作、高位追涨、节点踏错。\n- 仓位层面：是否重仓试错、亏损加仓、仓位与确定性不匹配。\n- 纪律层面：是否破位不止损、盈利不止盈、侥幸扛单、频繁换股。\n\n### （三）踏空/观望交易｜机会判断技能复盘\n- 当期确定性优质机会：待补充。\n- 踏空核心原因：主线识别滞后 / 龙头辨识度不足 / 恐高心理 / 持仓分散 / 等待过度。\n- 机会取舍技能优化：把可识别、可执行的机会转化为下期观察清单。\n\n## 六、个人交易技能短板汇总（系统性问题沉淀）\n1. 市场研判技能短板：需补充交易前对周期和量能的判断记录。\n2. 选股筛选技能短板：重点检查是否偏爱低位杂毛、龙头聚焦能力弱、只看价格不看逻辑。\n3. 买卖择时技能短板：重点检查启动期不敢进、高潮期盲目追、退潮期不愿走。\n4. 仓位管理技能短板：重点检查赚小钱轻仓、亏大钱重仓、无动态调仓逻辑。\n5. 风控纪律技能短板：重点检查止损不坚决、不会分批止盈、亏损后报复交易。\n6. 心态执行技能短板：重点检查贪婪拿不住、恐惧不敢上、侥幸扛亏损。\n\n## 七、当期成熟盈利技能固化（标准化动作沉淀）\n1. 行情适配技能：明确强势、震荡、弱势、混沌行情下的重仓、轻仓、空仓标准。\n2. 选股标准化技能：主线优先、龙头优先、联动优先，剔除无逻辑、无资金、无板块联动标的。\n3. 入场标准化技能：固定低吸/突破入场形态、量能条件和确认信号。\n4. 持仓标准化技能：跟踪板块联动、资金承接、关键均线和动态调仓条件。\n5. 止盈止损标准化技能：用支撑压力位、分批规则和极端行情预案约束操作。\n\n## 八、下期技能迭代计划（精准提升方案）\n### 1. 重点提升核心技能\n- 优先提升：主线甄别能力、仓位与确定性匹配能力。\n- 训练方法：每日复盘主线强度，记录每笔交易是否属于体系内机会。\n\n### 2. 新增交易技能规则\n- 选股：只做主线、龙头或板块联动明确的标的。\n- 择时：只在启动确认、分歧低吸或趋势回踩确认时入场。\n- 风控：单笔亏损达到预设阈值必须执行，不允许临盘改规则。\n- 仓位：仓位必须和行情确定性匹配，试错仓不得重仓。\n\n### 3. 禁止性交易红线\n1. 禁止无计划追高。\n2. 禁止亏损后情绪化加仓。\n3. 禁止无止损位开仓。\n\n### 4. 下期量化考核指标\n- 合规交易占比：目标 ≥ 80%。\n- 情绪化交易：目标降为 0。\n- 单笔亏损：控制在预设阈值内。\n- 整体盈亏比：目标 ≥ 1.5。\n\n## 九、技能成长总结与认知迭代\n1. 当期交易核心成长：从结果复盘转向技能复盘，关注动作是否可复制。\n2. 最致命的能力漏洞：没有数据记录时，无法判断问题来自认知、选股、择时、仓位还是纪律。\n3. 交易认知升级：稳定复利依赖机械化、标准化、纪律化交易，而不是单次盈亏。\n4. 长期技能迭代方向：聚焦可复制交易技能，弱化主观情绪，持续淘汰错误交易习惯。`,
+  };
+
+  return `# ${review.title}报告 - ${date}\n\n## 一、报告信息\n- 复盘类型：${review.title}\n- 报告风格：${styleText}\n- 复盘范围：${scope}\n- 生成说明：本报告基于当前页面样例行情、已选范围和用户点击的复盘类型生成，用于盘后归档和交易复盘。\n\n## 二、核心结论\n- 当前市场需要同时关注主线持续性、成交量配合和高位股反馈。\n- 已选范围会影响右侧选股结果，报告中的样例标的来自当前选股结果。\n- 后续操作应避免只看涨幅，需结合资金、位置、风险收益比做判断。\n\n## 关键标的概览\n| 股票代码 | 股票名称 | 最新 | 今日涨幅 |\n| --- | --- | --- | --- |\n${stockRows || '| - | 暂无数据 | - | - |'}\n\n${sections[review.title]}\n\n## 六、风险与免责声明\n- 以上内容为基于页面样例数据生成的复盘文本，不构成投资建议。\n- 真实交易需结合实时行情、基本面、资金流和个人风险承受能力独立判断。`;
+}
+
+function markdownToPrintHtml(markdown: string) {
+  const lines = markdown.split('\n');
+  const htmlLines: string[] = [];
+  let inList = false;
+  let inTable = false;
+  let tableRows: string[] = [];
+
+  const closeList = () => {
+    if (inList) {
+      htmlLines.push('</ul>');
+      inList = false;
+    }
+  };
+
+  const closeTable = () => {
+    if (inTable) {
+      htmlLines.push('<table>');
+      tableRows.forEach((row, index) => {
+        const cells = row.replace(/^\||\|$/g, '').split('|').map((cell) => escapeHtml(cell.trim()));
+        if (cells.every((cell) => /^[-: ]+$/.test(cell))) return;
+        const tag = index === 0 ? 'th' : 'td';
+        htmlLines.push(`<tr>${cells.map((cell) => `<${tag}>${cell}</${tag}>`).join('')}</tr>`);
+      });
+      htmlLines.push('</table>');
+    }
+    inTable = false;
+    tableRows = [];
+  };
+
+  lines.forEach((line) => {
+    if (line.trim().startsWith('|') && line.includes('|')) {
+      closeList();
+      inTable = true;
+      tableRows.push(line);
+      return;
+    }
+
+    closeTable();
+    if (!line.trim()) {
+      closeList();
+      return;
+    }
+    if (line.startsWith('# ')) {
+      closeList();
+      htmlLines.push(`<h1>${escapeHtml(line.slice(2))}</h1>`);
+    } else if (line.startsWith('## ')) {
+      closeList();
+      htmlLines.push(`<h2>${escapeHtml(line.slice(3))}</h2>`);
+    } else if (line.startsWith('### ')) {
+      closeList();
+      htmlLines.push(`<h3>${escapeHtml(line.slice(4))}</h3>`);
+    } else if (line.startsWith('- ')) {
+      if (!inList) {
+        htmlLines.push('<ul>');
+        inList = true;
+      }
+      htmlLines.push(`<li>${escapeHtml(line.slice(2))}</li>`);
+    } else {
+      closeList();
+      htmlLines.push(`<p>${escapeHtml(line)}</p>`);
+    }
+  });
+
+  closeList();
+  closeTable();
+  return htmlLines.join('\n');
+}
+
+function printReviewPdf(title: string, content: string) {
+  const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Songti SC', 'Heiti SC', Arial, sans-serif; color: #172033; line-height: 1.72; margin: 0; background: #eef2f7; }
+    .toolbar { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; background: #111827; color: #fff; box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18); }
+    .toolbar-title { font-size: 13px; font-weight: 600; }
+    .toolbar button { border: 0; border-radius: 6px; padding: 7px 12px; background: #2563eb; color: #fff; font-size: 12px; cursor: pointer; }
+    .page { max-width: 820px; min-height: 1120px; margin: 24px auto; padding: 42px 52px; background: #fff; box-shadow: 0 16px 48px rgba(15, 23, 42, 0.12); }
+    h1 { font-size: 26px; margin: 0 0 18px; padding-bottom: 14px; border-bottom: 3px solid #1f4fd8; }
+    h2 { font-size: 18px; color: #123a8c; margin-top: 24px; border-left: 4px solid #1f4fd8; padding-left: 10px; }
+    h3 { font-size: 15px; color: #344054; margin-top: 18px; }
+    p, li { font-size: 13px; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; }
+    th { background: #eef4ff; color: #123a8c; }
+    th, td { border: 1px solid #d0d5dd; padding: 7px 9px; text-align: left; }
+    ul { padding-left: 20px; }
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none; }
+      .page { max-width: none; min-height: auto; margin: 0; padding: 0; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="toolbar-title">${escapeHtml(title)}</div>
+    <button onclick="window.print()">保存/打印 PDF</button>
+  </div>
+  <main class="page">${markdownToPrintHtml(content)}</main>
+</body>
+</html>`;
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const opened = window.open(url, '_blank', 'width=960,height=720');
+  if (!opened) {
+    URL.revokeObjectURL(url);
+    return false;
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return true;
+}
+
+interface Props {
+  stocks?: StockItem[];
+}
+
+export default function AiChatPage({ stocks }: Props) {
+  const defaultStocks: StockItem[] = holdingStocks.map((h) => ({
+    序号: h.序号,
+    证券代码: h.证券代码,
+    证券名称: h.证券名称,
+    现价: h.现价,
+    涨幅: h.今日涨幅,
+    涨跌: 0,
+    涨速: 0,
+    换手: 0,
+    最高: h.现价,
+    最低: h.现价,
+    今开: h.现价,
+    昨收: h.现价,
+    量比: 0,
+  }));
+  const [selectedStocks, setSelectedStocks] = useState<string[]>([]);
+  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([]);
+  const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
+
+  const filterDisplayStocks = useMemo(() => {
+    const matchedNames = new Set<string>();
+
+    selectedStocks.forEach((n) => matchedNames.add(n));
+
+    if (selectedIndustries.length > 0) {
+      const map: Record<string, string[]> = {
+        '新能源': ['宁德时代', '阳光电源', '亿纬锂能'],
+        '半导体': ['中芯国际', '北方华创', '韦尔股份'],
+        '汽车零部件': ['比亚迪', '福耀玻璃', '均胜电子'],
+        '新材料': ['隆基绿能', '万华化学', '恩捷股份'],
+        '生物医药': ['药明康德', '恒瑞医药', '迈瑞医疗'],
+        '消费电子': ['立讯精密', '歌尔股份', '蓝思科技'],
+        'IT设备': ['海康威视', '大华股份', '浪潮信息'],
+        '专用机械': ['三一重工', '中联重科', '徐工机械'],
+        '电子器件': ['京东方A', 'TCL科技', '深天马A'],
+        '通信设备': ['中兴通讯', '烽火通信', '亨通光电'],
+        '软件开发': ['金山办公', '用友网络', '深信服'],
+        '化工': ['万华化学', '恒力石化', '荣盛石化'],
+      };
+      selectedIndustries.flatMap((ind) => map[ind] || []).forEach((n) => matchedNames.add(n));
+    }
+
+    if (selectedSectors.length > 0) {
+      const map: Record<string, string[]> = {
+        '新能源车': ['比亚迪', '宁德时代', '亿纬锂能'],
+        '光伏': ['隆基绿能', '阳光电源', '通威股份'],
+        '芯片': ['中芯国际', '北方华创', '卓胜微'],
+        '储能': ['宁德时代', '阳光电源', '派能科技'],
+        '机器人': ['汇川技术', '埃斯顿', '绿的谐波'],
+        '人工智能': ['科大讯飞', '商汤科技', '寒武纪'],
+        '5G': ['中兴通讯', '烽火通信', '信维通信'],
+        '云计算': ['金山办公', '用友网络', '广联达'],
+        '低空经济': ['万丰奥威', '中信海直', '纵横股份'],
+        '钠电池': ['宁德时代', '传艺科技', '维科技术'],
+        '算力租赁': ['浪潮信息', '中科曙光', '鸿博股份'],
+      };
+      selectedSectors.flatMap((sec) => map[sec] || []).forEach((n) => matchedNames.add(n));
+    }
+
+    if (matchedNames.size > 0) {
+      const source = stocks && stocks.length > 0 ? [...stocks] : [...defaultStocks];
+      const existing = source.filter((s) => matchedNames.has(s.证券名称));
+      const existingNames = new Set(existing.map((s) => s.证券名称));
+      const missing = [...matchedNames].filter((n) => !existingNames.has(n));
+      const synthetic = missing.map((name) => {
+        const seed = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+        const basePrice = 30 + (seed % 300);
+        const pct = ((seed % 20) - 5);
+        return {
+          序号: 0, 证券代码: `AI${seed}`, 证券名称: name,
+          现价: parseFloat(basePrice.toFixed(2)),
+          涨幅: parseFloat(pct.toFixed(2)),
+          涨跌: 0, 涨速: 0, 换手: 0,
+          最高: 0, 最低: 0, 今开: 0, 昨收: 0, 量比: 0,
+        };
+      });
+      const merged = [...existing, ...synthetic];
+      const seen = new Set<string>();
+      return merged.filter((s) => seen.has(s.证券名称) ? false : (seen.add(s.证券名称), true));
+    }
+
+    return stocks && stocks.length > 0 ? [...stocks] : [...defaultStocks];
+  }, [stocks, selectedStocks.join(','), selectedIndustries.join(','), selectedSectors.join(',')]);
+
+  const displayStocks = filterDisplayStocks;
+
+  const isFiltered = !!(stocks || selectedStocks.length > 0 || selectedIndustries.length > 0 || selectedSectors.length > 0);
+
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: '您好！我是您的量化智能助手。您可以提出关于个股筛选、行业异动或策略建议的问题，例如：「帮我筛选 PE 低于 20 的高成长电子股」', time: now() },
   ]);
   const [input, setInput] = useState('');
+  const [resultQuery, setResultQuery] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [reviewGeneratingTitle, setReviewGeneratingTitle] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [historyRecords, setHistoryRecords] = useState<ReportRecord[]>(initialRecords);
   const [selectedReport, setSelectedReport] = useState<ReportRecord | null>(null);
@@ -76,6 +368,7 @@ export default function AiChatPage() {
   const [selectedAction, setSelectedAction] = useState('筛选');
   const [logoImage, setLogoImage] = useState<string | null>('/caitong-finance/logo.jpg');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const resultColumns = useMemo(() => getResultColumns(input.trim() || resultQuery), [input, resultQuery]);
 
   const quickPrompts: Record<string, string> = {
     筛选: '帮我筛选PE低于20的高成长电子股',
@@ -88,27 +381,34 @@ export default function AiChatPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping]);
+  }, [messages, isTyping, reviewGeneratingTitle]);
 
   const addMessage = (role: 'user' | 'assistant', content: string) => {
     setMessages((prev) => [...prev, { role, content, time: now() }]);
   };
 
+  const toggleArr = (setArr: Dispatch<SetStateAction<string[]>>, val: string) => {
+    setArr((prev) => prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]);
+  };
+
   const handleSend = (text: string) => {
-    if (!text.trim() || isTyping) return;
-    addMessage('user', text.trim());
+    const trimmedText = text.trim();
+    if (!trimmedText || isTyping) return;
+    setResultQuery(trimmedText);
+    addMessage('user', trimmedText);
     setInput('');
     setIsTyping(true);
+    setReviewGeneratingTitle(null);
 
     const selectedInfo = [
-      selectedIndustry && `行业:${selectedIndustry}`,
-      selectedSector && `概念:${selectedSector}`,
-      selectedStock && `标的:${selectedStock}`,
+      selectedIndustries.length > 0 && `行业:${selectedIndustries.join('、')}`,
+      selectedSectors.length > 0 && `概念:${selectedSectors.join('、')}`,
+      selectedStocks.length > 0 && `标的:${selectedStocks.join('、')}`,
     ].filter(Boolean).join('，');
 
     const context = selectedInfo ? `[已选范围：${selectedInfo}] ` : '';
 
-    const matchedKey = Object.keys(botReplies).find((k) => text.includes(k));
+    const matchedKey = Object.keys(botReplies).find((k) => trimmedText.includes(k));
     const reply = context + (botReplies[matchedKey || ''] || botReplies.default);
 
     setTimeout(() => {
@@ -134,17 +434,55 @@ export default function AiChatPage() {
     if (key === '复盘') {
       setShowReviewModal(true);
     } else {
-      setInput(quickPrompts[key] || '');
+      const prompt = quickPrompts[key] || '';
+      setInput(prompt);
+      setResultQuery(prompt);
     }
   };
 
   const handleTagClick = (tag: string) => {
-    setSelectedStock(tag === selectedStock ? null : tag);
+    toggleArr(setSelectedStocks, tag);
   };
 
-  const handleReviewSelect = (prompt: string) => {
+  const handleReviewSelect = (review: ReviewOption) => {
     setShowReviewModal(false);
-    setInput(prompt);
+    setInput(review.prompt);
+    setResultQuery(review.prompt);
+    setReviewGeneratingTitle(review.title);
+    setIsTyping(true);
+    addMessage('user', review.prompt);
+
+    const reportId = `${Date.now()}-${review.title}`;
+    const nowDate = new Date();
+    const dateStr = nowDate.toLocaleDateString('zh-CN');
+    const timeStr = nowDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const pendingRecord: ReportRecord = {
+      id: reportId,
+      summary: `${dateStr}${review.title}报告`,
+      time: `${dateStr} ${timeStr}`,
+      content: '',
+      status: 'generating',
+    };
+    setHistoryRecords((prev) => [pendingRecord, ...prev]);
+    setSelectedReport(null);
+
+    setTimeout(() => {
+      const scope = formatSelectedScope(selectedStocks, selectedIndustries, selectedSectors);
+      const reportContent = buildReviewReport(review, displayStocks, scope);
+      const record: ReportRecord = {
+        id: reportId,
+        summary: `${dateStr}${review.title}报告`,
+        time: `${dateStr} ${timeStr}`,
+        content: reportContent,
+        status: 'done',
+      };
+
+      setIsTyping(false);
+      setReviewGeneratingTitle(null);
+      addMessage('assistant', `已生成《${review.title}报告》，可点击右侧报告记录打开。`);
+      setHistoryRecords((prev) => prev.map((item) => item.id === reportId ? record : item));
+      setSelectedReport(null);
+    }, 900);
   };
 
   const handleLogoClick = () => {
@@ -165,9 +503,9 @@ export default function AiChatPage() {
         <div className="px-4 py-3 border-b border-gray-700/50">
           <h3 className="text-white text-xs font-semibold">选股</h3>
         </div>
-        <div className="flex-1 overflow-auto scrollbar-thin p-3 space-y-4">
+        <div className="flex-1 overflow-auto scrollbar-thin p-3" style={{ display: 'flex', flexDirection: 'column', gap: '40px' }}>
           <div>
-            <h4 className="text-secondary text-xs mb-2">股票筛选</h4>
+            <h4 className="text-neutral text-xs mb-2 font-medium">股票筛选</h4>
             <div className="relative mb-2">
               <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
               <input
@@ -182,7 +520,7 @@ export default function AiChatPage() {
                   key={tag}
                   onClick={() => handleTagClick(tag)}
                   className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
-                    selectedStock === tag
+                    selectedStocks.includes(tag)
                       ? 'bg-blue-600 text-white'
                       : 'bg-gray-700/50 text-secondary hover:bg-gray-600'
                   }`}
@@ -194,14 +532,14 @@ export default function AiChatPage() {
           </div>
 
           <div>
-            <h4 className="text-secondary text-xs mb-2">行业分析（申万）</h4>
+            <h4 className="text-neutral text-xs mb-2 font-medium">行业分析（申万）</h4>
             <div className="flex gap-1 flex-wrap">
               {industries.map((ind) => (
                 <button
                   key={ind}
-                  onClick={() => setSelectedIndustry(ind === selectedIndustry ? null : ind)}
+                  onClick={() => toggleArr(setSelectedIndustries, ind)}
                   className={`px-2 py-1 text-xs rounded transition-colors ${
-                    selectedIndustry === ind
+                    selectedIndustries.includes(ind)
                       ? 'bg-blue-600 text-white'
                       : 'bg-gray-700/30 text-secondary hover:bg-gray-600'
                   }`}
@@ -213,20 +551,39 @@ export default function AiChatPage() {
           </div>
 
           <div>
-            <h4 className="text-secondary text-xs mb-2">板块概念</h4>
+            <h4 className="text-neutral text-xs mb-2 font-medium">板块概念</h4>
             <div className="flex gap-1 flex-wrap">
               {sectors.map((sec) => (
                 <button
                   key={sec}
-                  onClick={() => setSelectedSector(sec === selectedSector ? null : sec)}
+                  onClick={() => toggleArr(setSelectedSectors, sec)}
                   className={`px-2 py-1 text-xs rounded transition-colors ${
-                    selectedSector === sec
+                    selectedSectors.includes(sec)
                       ? 'bg-blue-600 text-white'
                       : 'bg-gray-700/30 text-secondary hover:bg-gray-600'
                   }`}
                 >
                   {sec}
                 </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-neutral text-xs mb-2 font-medium">持仓股票</h4>
+            <div className="flex gap-1 flex-wrap">
+              {holdingStocks.map((h) => (
+                <span
+                  key={h.证券代码}
+                  onClick={() => toggleArr(setSelectedStocks, h.证券名称)}
+                  className={`px-2 py-1 text-[10px] rounded cursor-pointer transition-colors ${
+                    selectedStocks.includes(h.证券名称)
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700/30 text-secondary hover:bg-gray-600'
+                  }`}
+                >
+                  {h.证券名称}
+                </span>
               ))}
             </div>
           </div>
@@ -330,7 +687,9 @@ export default function AiChatPage() {
                     <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '150ms' }} />
                     <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
-                  <span className="text-secondary text-xs">正在分析</span>
+                  <span className="text-secondary text-xs">
+                    {reviewGeneratingTitle ? `正在生成${reviewGeneratingTitle}报告` : '正在分析'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -391,48 +750,41 @@ export default function AiChatPage() {
           <>
             <div className="px-4 py-3 border-b border-gray-700/50">
               <div className="flex items-center justify-between">
-                <h3 className="text-white text-xs font-semibold">分析结果</h3>
+                <h3 className="text-white text-xs font-semibold">选股结果</h3>
                 <span className="text-blue-400 text-xs">
-                  {messages.length > 1 ? analysisStocks.length : 0}只标的
+                  {displayStocks.length}{isFiltered ? '个股票' : '只持仓股票'}
                 </span>
               </div>
             </div>
 
-            <div className="flex-1 overflow-auto scrollbar-thin p-3 space-y-2 border-b border-gray-700/50">
-              {messages.length > 1 ? (
-                analysisStocks.map((s, idx) => {
-                  const isUp = !s.增长.includes('-');
-                  return (
-                    <div
-                      key={s.代码}
-                      className="bg-[#242730] rounded-lg p-3 border border-gray-700/30 hover:border-gray-600/50 cursor-pointer transition-all animate-[fadeIn_0.3s_ease]"
-                      style={{ animationDelay: `${idx * 80}ms` }}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div>
-                          <span className="text-white text-xs font-medium">{s.名称}</span>
-                          <span className="text-secondary text-[10px] ml-2 font-mono">{s.代码}</span>
-                        </div>
-                        <span className={`text-xs font-mono font-semibold ${isUp ? 'text-up' : 'text-down'}`}>
-                          {isUp ? '+' : ''}{s.增长}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-secondary w-6">PE</span>
-                        <div className="flex-1 h-2 bg-gray-700/50 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-400"
-                            style={{ width: `${Math.min(s.PE / 40 * 100, 100)}%` }}
-                          />
-                        </div>
-                        <span className="text-[10px] text-blue-400 font-mono w-10 text-right">{s.PE}</span>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="flex items-center justify-center h-full text-xs text-secondary">暂无分析结果</div>
-              )}
+            <div className="flex-1 overflow-auto scrollbar-thin border-b border-gray-700/50">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 bg-[#1A1D23] z-10">
+                  <tr className="text-secondary border-b border-gray-700/50">
+                    {resultColumns.map((column) => (
+                      <th key={column.key} className={`py-2 px-3 font-normal whitespace-nowrap ${column.align === 'right' ? 'text-right' : 'text-left'}`}>
+                        {column.title}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayStocks.map((s, idx) => {
+                    return (
+                      <tr key={`${s.证券代码}-${s.证券名称}`} className={`border-b border-gray-800 hover:bg-gray-700/30 cursor-pointer transition-colors ${idx%2===0?'bg-primary-bg':'bg-primary-chart'}`}>
+                        {resultColumns.map((column) => (
+                          <td
+                            key={column.key}
+                            className={`py-1.5 px-3 whitespace-nowrap ${column.align === 'right' ? 'text-right font-mono' : ''} ${column.className?.(s) || 'text-neutral'}`}
+                          >
+                            {column.render(s)}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
 
             <div className="flex-1 overflow-auto scrollbar-thin px-3 py-2 border-t border-gray-700/50">
@@ -440,12 +792,26 @@ export default function AiChatPage() {
               <div className="space-y-2">
                 {historyRecords.map((rec, idx) => (
                   <div
-                    key={idx}
-                    onClick={() => setSelectedReport(rec)}
-                    className="p-2 rounded bg-[#242730] cursor-pointer hover:bg-gray-700/50 transition-colors group"
+                    key={rec.id || idx}
+                    onClick={() => {
+                      if (rec.status === 'generating') return;
+                      setSelectedReport(rec);
+                      if (rec.content) {
+                        printReviewPdf(rec.summary, rec.content);
+                      }
+                    }}
+                    className={`p-2 rounded bg-[#242730] transition-colors group ${rec.status === 'generating' ? 'cursor-not-allowed opacity-80' : 'cursor-pointer hover:bg-gray-700/50'}`}
                   >
-                    <p className="text-neutral text-xs group-hover:text-blue-400 transition-colors">{rec.summary}</p>
-                    <span className="text-gray-500 text-xs">{rec.time}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-neutral text-xs group-hover:text-blue-400 transition-colors truncate">{rec.summary}</p>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${rec.status === 'generating' ? 'bg-blue-500/15 text-blue-300' : 'bg-gray-700/60 text-gray-400'}`}>
+                        {rec.status === 'generating' ? '生成中' : '点击打开'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1">
+                      {rec.status === 'generating' && <Loader2 size={10} className="text-blue-400 animate-spin" />}
+                      <span className="text-gray-500 text-xs">{rec.time}</span>
+                    </div>
                   </div>
                 ))}
               </div>
