@@ -1,0 +1,20 @@
+{
+  "skill_name": "a-stock-trend-analysis",
+  "evals": [
+    {
+      "id": "global_trend_scan",
+      "prompt": "点击即时分析里的趋势判断，生成全市场趋势研判报告。",
+      "expected_output": "输出趋势形态表征、深度溯源分析、可持续性预判、全市场趋势小结四段，所有标的包含股票代码。"
+    },
+    {
+      "id": "single_stock_trend",
+      "prompt": "600030.SH 当前趋势还能延续吗？",
+      "expected_output": "输出该股趋势形态、底层根因、根因存续状态、后续预判和风险点。"
+    },
+    {
+      "id": "pulse_boundary",
+      "prompt": "某股票今天突然涨停，帮我判断长期趋势。",
+      "expected_output": "说明单日脉冲应交由异动解读，趋势研判只处理持续斜率或成型趋势。"
+    }
+  ]
+}

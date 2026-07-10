@@ -1,12 +1,13 @@
-import { useState, useRef, useEffect, useMemo, Dispatch, SetStateAction } from 'react';
-import { Search, Send, Bot, User, BarChart3, TrendingUp, Activity, ClipboardList, Target, ShieldAlert, Loader2, FileText, X } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { Send, Bot, User, BarChart3, TrendingUp, Activity, ClipboardList, Target, ShieldAlert, Loader2, FileText, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import AiReviewModal, { ReviewOption } from './AiReviewModal';
 import { StockItem } from '../../types';
 import { holdingStocks } from '../../data/watchlistData';
-
-const hotTags = ['立讯精密', '药明康德', '美的集团', '海康威视', '中信证券'];
-const industries = ['IT设备', '专用机械', '汽车零部件', '电子器件', '生物医药', '新材料', '新能源', '半导体', '消费电子', '通信设备', '软件开发', '化工'];
-const sectors = ['新能源车', '人工智能', '光伏', '军工', '芯片', '5G', '云计算', '储能', '机器人', '低空经济', '钠电池', '算力租赁'];
+import { AbnormalMovementData, AbnormalMovementStock, loadAbnormalMovementData } from '../../services/abnormalMovementService';
+import abnormalMovementSkill from '../../../skills/abnormal_movement/SKILL.md?raw';
+import abnormalReportTemplate from '../../../skills/abnormal_movement/assets/abnormal-report-template.md?raw';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -61,6 +62,12 @@ const quickActions = [
 function now() {
   const d = new Date();
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function getDateTime() {
+  const d = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function getStockSeed(stock: StockItem) {
@@ -120,14 +127,41 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;');
 }
 
-function formatSelectedScope(stocks: string[], industries: string[], sectors: string[]) {
-  const parts = [
-    industries.length > 0 && `行业：${industries.join('、')}`,
-    sectors.length > 0 && `概念：${sectors.join('、')}`,
-    stocks.length > 0 && `标的：${stocks.join('、')}`,
-  ].filter(Boolean);
-
-  return parts.length > 0 ? parts.join('；') : '未选择特定范围，基于全市场样例数据生成';
+function renderChatContent(content: string) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h1 className="mb-3 mt-1 border-b border-blue-400/30 pb-2 text-lg font-bold text-white">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-2 mt-5 border-l-2 border-blue-400 pl-2 text-sm font-semibold text-blue-200 first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-1.5 mt-4 text-xs font-semibold text-blue-100">{children}</h3>,
+        h4: ({ children }) => <h4 className="mb-1 mt-3 font-semibold text-[#E6EDF7]">{children}</h4>,
+        p: ({ children }) => <p className="my-2 leading-6 first:mt-0 last:mb-0">{children}</p>,
+        ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5 marker:text-blue-400">{children}</ul>,
+        ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5 marker:text-blue-300">{children}</ol>,
+        li: ({ children }) => <li className="pl-1 leading-5">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+        blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-blue-400/70 bg-blue-500/5 px-3 py-1 text-gray-300">{children}</blockquote>,
+        a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-blue-400 underline underline-offset-2 hover:text-blue-300">{children}</a>,
+        hr: () => <hr className="my-4 border-gray-700" />,
+        pre: ({ children }) => <pre className="my-3 max-w-full overflow-x-auto rounded-lg bg-[#11141B] p-3 text-[11px] leading-5 text-gray-200">{children}</pre>,
+        code: ({ children, className }) => className
+          ? <code className={className}>{children}</code>
+          : <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-blue-200">{children}</code>,
+        table: ({ children }) => (
+          <div className="my-3 max-w-full overflow-x-auto rounded-lg border border-gray-600/70">
+            <table className="min-w-max w-full border-collapse text-[11px]">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-blue-500/10 text-blue-200">{children}</thead>,
+        tr: ({ children }) => <tr className="border-b border-gray-700/60 last:border-b-0 even:bg-white/[0.02]">{children}</tr>,
+        th: ({ children }) => <th className="border-r border-gray-600/70 px-3 py-2 text-left font-medium last:border-r-0">{children}</th>,
+        td: ({ children }) => <td className="border-r border-gray-700/60 px-3 py-2 align-top text-[#D7DFEC] last:border-r-0">{children}</td>,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 function buildReviewReport(review: ReviewOption, displayStocks: StockItem[], scope: string) {
@@ -144,6 +178,89 @@ function buildReviewReport(review: ReviewOption, displayStocks: StockItem[], sco
   };
 
   return `# ${review.title}报告 - ${date}\n\n## 一、报告信息\n- 复盘类型：${review.title}\n- 报告风格：${styleText}\n- 复盘范围：${scope}\n- 生成说明：本报告基于当前页面样例行情、已选范围和用户点击的复盘类型生成，用于盘后归档和交易复盘。\n\n## 二、核心结论\n- 当前市场需要同时关注主线持续性、成交量配合和高位股反馈。\n- 已选范围会影响右侧选股结果，报告中的样例标的来自当前选股结果。\n- 后续操作应避免只看涨幅，需结合资金、位置、风险收益比做判断。\n\n## 关键标的概览\n| 股票代码 | 股票名称 | 最新 | 今日涨幅 |\n| --- | --- | --- | --- |\n${stockRows || '| - | 暂无数据 | - | - |'}\n\n${sections[review.title]}\n\n## 六、风险与免责声明\n- 以上内容为基于页面样例数据生成的复盘文本，不构成投资建议。\n- 真实交易需结合实时行情、基本面、资金流和个人风险承受能力独立判断。`;
+}
+
+function inferSector(stock: StockItem) {
+  const name = stock.证券名称;
+  if (/证券|中信|东方/.test(name)) return '非银金融 / 券商';
+  if (/宁德|比亚迪|隆基|新能源|电池/.test(name)) return '新能源 / 电池链';
+  if (/芯|立讯|电子|科技|中兴/.test(name)) return '半导体 / 消费电子';
+  if (/药|康|医|生物/.test(name)) return '医药生物';
+  if (/茅台|美的|消费/.test(name)) return '大消费';
+  return '综合行业';
+}
+
+function buildAbnormalMovementReport(movementData: AbnormalMovementData, scope: string, userInput: string) {
+  const generatedAt = getDateTime();
+  const abnormalStocks = [...movementData.stocks]
+    .sort((a, b) => Math.abs(b.涨幅) - Math.abs(a.涨幅))
+    .slice(0, 5);
+  const skillTitle = abnormalMovementSkill.match(/^#\s+(.+)$/m)?.[1] || 'A股异动解读与归因分析 Skill';
+  const templateTitle = abnormalReportTemplate.match(/^#\s+(.+)$/m)?.[1] || '异动解读报告';
+
+  if (abnormalStocks.length === 0) {
+    return '【当前全市场无涨跌幅异常标的，无异动解读内容】';
+  }
+
+  const baseRows = abnormalStocks.map((stock) => {
+    const absChange = Math.abs(stock.涨幅);
+    const type = stock.涨幅 >= 0 ? (absChange >= 9 ? '强势拉升' : '放量上涨') : (absChange >= 5 ? '快速下跌' : '回撤异动');
+    const turnover = stock.换手 ? `换手率 ${stock.换手.toFixed(2)}%` : '换手率待同步';
+    const volume = stock.量比 ? `量比 ${stock.量比.toFixed(2)}` : '量比待同步';
+    const amount = stock.成交额 ? `成交额 ${(stock.成交额 / 100000).toFixed(2)}亿元` : turnover;
+    const mainFlow = stock.主力净流入 === undefined ? volume : `主力净流入 ${(stock.主力净流入 / 10000).toFixed(2)}亿元`;
+    return `| ${stock.证券代码} | ${stock.证券名称} | ${(stock as AbnormalMovementStock).所属板块 || inferSector(stock)} | ${type} | ${stock.涨幅 >= 0 ? '+' : ''}${stock.涨幅.toFixed(2)}% | ${absChange >= 5 ? '涨跌幅绝对值 >= 5%' : '当前列表相对波动居前'} | ${amount} / ${mainFlow} |`;
+  }).join('\n');
+
+  const attributionRows = abnormalStocks.map((stock) => {
+    const sector = (stock as AbnormalMovementStock).所属板块 || inferSector(stock);
+    const cause = stock.直接诱因 || (stock.涨幅 >= 0 ? `${sector}方向资金关注度提升，短线情绪扩散` : `${sector}方向承压，短线资金兑现或避险偏好抬升`);
+    const category = stock.诱因分类 || (stock.涨幅 >= 0 ? '资金驱动 / 情绪扩散' : '资金流出 / 风险偏好下降');
+    const weight = Math.min(90, Math.max(45, Math.round(Math.abs(stock.涨幅) * 8 + (stock.量比 || 1) * 5)));
+    const sentiment = Math.max(-10, Math.min(10, Math.round(stock.涨幅)));
+    const confidence = Math.min(92, Math.max(60, 62 + Math.round(Math.abs(stock.涨幅) * 3)));
+    return `| ${stock.证券代码} | ${cause} | ${category} | ${stock.信息来源 || movementData.source} | ${weight}% | ${sentiment} | ${confidence} | 日内短效 |`;
+  }).join('\n');
+
+  const sectors = Array.from(new Set(abnormalStocks.map((stock) => stock.所属板块 || inferSector(stock)))).slice(0, 3);
+  const avgChange = abnormalStocks.reduce((sum, stock) => sum + stock.涨幅, 0) / abnormalStocks.length;
+  const leadingNames = abnormalStocks.slice(0, 3).map((stock) => stock.证券名称).join('、');
+  const globalSentiment = Math.max(-10, Math.min(10, Math.round(avgChange)));
+
+  return `# ${templateTitle}
+
+- 生成时间：${generatedAt}
+- 报告范围：${scope}
+- 交易日期：${movementData.tradeDate || '最新可用交易日'}
+- 数据来源：${movementData.source}${movementData.isRealData ? '' : '（接口不可用时回退）'}
+- 触发来源：智询界面 / 异动解读快捷动作
+- 调用技能：skills/abnormal_movement（${skillTitle}）
+- 用户输入：${userInput}
+- 生成说明：优先动态拉取真实行情、成交额、换手率、量比和资金流字段，再按 ${templateTitle} 模板生成；接口不可用时才回退到当前页面行情。
+
+## 异动基础表征
+
+| 股票代码 | 股票名称 | 所属板块 | 异动类型 | 区间涨跌幅 | 异动触发阈值 | 当日成交额 / 资金净流入 |
+| --- | --- | --- | --- | --- | --- | --- |
+${baseRows}
+
+## 多维度归因拆解
+
+| 股票代码 | 直接表层诱因 | 诱因分类 | 信息来源 | 影响权重 | 情绪值 | 置信度分值 | 诱因时效 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+${attributionRows}
+
+## 全局异动归因总结
+
+| 全局归因主题 | 影响板块 / 标的 | 归因分类 | 核心证据 | 市场影响权重 | 情绪值 | 置信度分值 | 异动性质 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 短线资金集中交易波动居前标的 | ${sectors.join('、')} / ${leadingNames} | 资金驱动 / 情绪扩散 | 当前列表中波动居前标的集中在 ${sectors.join('、')}，平均涨跌幅 ${avgChange >= 0 ? '+' : ''}${avgChange.toFixed(2)}% | 78% | ${globalSentiment} | 76 | 短期脉冲 |
+
+## 短期异动影响小结
+
+- 本次异动解读只解释短期异常波动和可能归因，不输出买卖建议、仓位建议或长期趋势判断。
+- 当前可见异动主要来自涨跌幅居前标的的资金情绪扩散，仍需结合实时成交额、主力净流入、公告和新闻源复核。
+- 若后续连续多日放量同向运行，可标记为趋势雏形，进一步交由趋势判断能力分析。`;
 }
 
 function markdownToPrintHtml(markdown: string) {
@@ -281,78 +398,8 @@ export default function AiChatPage({ stocks }: Props) {
     昨收: h.现价,
     量比: 0,
   }));
-  const [selectedStocks, setSelectedStocks] = useState<string[]>([]);
-  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([]);
-  const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
-
-  const filterDisplayStocks = useMemo(() => {
-    const matchedNames = new Set<string>();
-
-    selectedStocks.forEach((n) => matchedNames.add(n));
-
-    if (selectedIndustries.length > 0) {
-      const map: Record<string, string[]> = {
-        '新能源': ['宁德时代', '阳光电源', '亿纬锂能'],
-        '半导体': ['中芯国际', '北方华创', '韦尔股份'],
-        '汽车零部件': ['比亚迪', '福耀玻璃', '均胜电子'],
-        '新材料': ['隆基绿能', '万华化学', '恩捷股份'],
-        '生物医药': ['药明康德', '恒瑞医药', '迈瑞医疗'],
-        '消费电子': ['立讯精密', '歌尔股份', '蓝思科技'],
-        'IT设备': ['海康威视', '大华股份', '浪潮信息'],
-        '专用机械': ['三一重工', '中联重科', '徐工机械'],
-        '电子器件': ['京东方A', 'TCL科技', '深天马A'],
-        '通信设备': ['中兴通讯', '烽火通信', '亨通光电'],
-        '软件开发': ['金山办公', '用友网络', '深信服'],
-        '化工': ['万华化学', '恒力石化', '荣盛石化'],
-      };
-      selectedIndustries.flatMap((ind) => map[ind] || []).forEach((n) => matchedNames.add(n));
-    }
-
-    if (selectedSectors.length > 0) {
-      const map: Record<string, string[]> = {
-        '新能源车': ['比亚迪', '宁德时代', '亿纬锂能'],
-        '光伏': ['隆基绿能', '阳光电源', '通威股份'],
-        '芯片': ['中芯国际', '北方华创', '卓胜微'],
-        '储能': ['宁德时代', '阳光电源', '派能科技'],
-        '机器人': ['汇川技术', '埃斯顿', '绿的谐波'],
-        '人工智能': ['科大讯飞', '商汤科技', '寒武纪'],
-        '5G': ['中兴通讯', '烽火通信', '信维通信'],
-        '云计算': ['金山办公', '用友网络', '广联达'],
-        '低空经济': ['万丰奥威', '中信海直', '纵横股份'],
-        '钠电池': ['宁德时代', '传艺科技', '维科技术'],
-        '算力租赁': ['浪潮信息', '中科曙光', '鸿博股份'],
-      };
-      selectedSectors.flatMap((sec) => map[sec] || []).forEach((n) => matchedNames.add(n));
-    }
-
-    if (matchedNames.size > 0) {
-      const source = stocks && stocks.length > 0 ? [...stocks] : [...defaultStocks];
-      const existing = source.filter((s) => matchedNames.has(s.证券名称));
-      const existingNames = new Set(existing.map((s) => s.证券名称));
-      const missing = [...matchedNames].filter((n) => !existingNames.has(n));
-      const synthetic = missing.map((name) => {
-        const seed = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-        const basePrice = 30 + (seed % 300);
-        const pct = ((seed % 20) - 5);
-        return {
-          序号: 0, 证券代码: `AI${seed}`, 证券名称: name,
-          现价: parseFloat(basePrice.toFixed(2)),
-          涨幅: parseFloat(pct.toFixed(2)),
-          涨跌: 0, 涨速: 0, 换手: 0,
-          最高: 0, 最低: 0, 今开: 0, 昨收: 0, 量比: 0,
-        };
-      });
-      const merged = [...existing, ...synthetic];
-      const seen = new Set<string>();
-      return merged.filter((s) => seen.has(s.证券名称) ? false : (seen.add(s.证券名称), true));
-    }
-
-    return stocks && stocks.length > 0 ? [...stocks] : [...defaultStocks];
-  }, [stocks, selectedStocks.join(','), selectedIndustries.join(','), selectedSectors.join(',')]);
-
-  const displayStocks = filterDisplayStocks;
-
-  const isFiltered = !!(stocks || selectedStocks.length > 0 || selectedIndustries.length > 0 || selectedSectors.length > 0);
+  const displayStocks = useMemo(() => stocks && stocks.length > 0 ? [...stocks] : [...defaultStocks], [stocks]);
+  const isFiltered = !!stocks;
 
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: '您好！我是您的量化智能助手。您可以提出关于个股筛选、行业异动或策略建议的问题，例如：「帮我筛选 PE 低于 20 的高成长电子股」', time: now() },
@@ -360,8 +407,10 @@ export default function AiChatPage({ stocks }: Props) {
   const [input, setInput] = useState('');
   const [resultQuery, setResultQuery] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [reviewGeneratingTitle, setReviewGeneratingTitle] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const streamTimerRef = useRef<number | null>(null);
   const [historyRecords, setHistoryRecords] = useState<ReportRecord[]>(initialRecords);
   const [selectedReport, setSelectedReport] = useState<ReportRecord | null>(null);
   const [showReviewModal, setShowReviewModal] = useState(false);
@@ -380,16 +429,36 @@ export default function AiChatPage({ stocks }: Props) {
   };
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping, reviewGeneratingTitle]);
+    bottomRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+  }, [messages, isTyping, isStreaming, reviewGeneratingTitle]);
+
+  useEffect(() => () => {
+    if (streamTimerRef.current !== null) window.clearInterval(streamTimerRef.current);
+  }, []);
 
   const addMessage = (role: 'user' | 'assistant', content: string) => {
     setMessages((prev) => [...prev, { role, content, time: now() }]);
   };
 
-  const toggleArr = (setArr: Dispatch<SetStateAction<string[]>>, val: string) => {
-    setArr((prev) => prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]);
-  };
+  const streamAssistantMessage = (content: string) => new Promise<void>((resolve) => {
+    let visibleLength = 0;
+    setIsStreaming(true);
+    setMessages((prev) => [...prev, { role: 'assistant', content: '', time: now() }]);
+
+    streamTimerRef.current = window.setInterval(() => {
+      visibleLength = Math.min(visibleLength + 3, content.length);
+      setMessages((prev) => prev.map((message, index) => (
+        index === prev.length - 1 ? { ...message, content: content.slice(0, visibleLength) } : message
+      )));
+
+      if (visibleLength >= content.length) {
+        if (streamTimerRef.current !== null) window.clearInterval(streamTimerRef.current);
+        streamTimerRef.current = null;
+        setIsStreaming(false);
+        resolve();
+      }
+    }, 45);
+  });
 
   const handleSend = (text: string) => {
     const trimmedText = text.trim();
@@ -400,20 +469,12 @@ export default function AiChatPage({ stocks }: Props) {
     setIsTyping(true);
     setReviewGeneratingTitle(null);
 
-    const selectedInfo = [
-      selectedIndustries.length > 0 && `行业:${selectedIndustries.join('、')}`,
-      selectedSectors.length > 0 && `概念:${selectedSectors.join('、')}`,
-      selectedStocks.length > 0 && `标的:${selectedStocks.join('、')}`,
-    ].filter(Boolean).join('，');
-
-    const context = selectedInfo ? `[已选范围：${selectedInfo}] ` : '';
-
     const matchedKey = Object.keys(botReplies).find((k) => trimmedText.includes(k));
-    const reply = context + (botReplies[matchedKey || ''] || botReplies.default);
+    const reply = botReplies[matchedKey || ''] || botReplies.default;
 
-    setTimeout(() => {
+    setTimeout(async () => {
+      await streamAssistantMessage(reply);
       setIsTyping(false);
-      addMessage('assistant', reply);
       if (matchedKey === '复盘' || matchedKey === '总结') {
         const nowDate = new Date();
         const dateStr = nowDate.toLocaleDateString('zh-CN');
@@ -433,15 +494,47 @@ export default function AiChatPage({ stocks }: Props) {
     setSelectedAction(key);
     if (key === '复盘') {
       setShowReviewModal(true);
+    } else if (key === '异动') {
+      const prompt = quickPrompts[key] || '生成异动解读报告';
+      const reportId = `${Date.now()}-异动解读`;
+      const dateStr = new Date().toLocaleDateString('zh-CN');
+      const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      const pendingRecord: ReportRecord = {
+        id: reportId,
+        summary: `${dateStr}异动解读报告`,
+        time: `${dateStr} ${timeStr}`,
+        content: '',
+        status: 'generating',
+      };
+
+      setInput(prompt);
+      setResultQuery(prompt);
+      setReviewGeneratingTitle('异动解读');
+      setIsTyping(true);
+      addMessage('user', prompt);
+      setHistoryRecords((prev) => [pendingRecord, ...prev]);
+      setSelectedReport(null);
+
+      window.setTimeout(async () => {
+        const scope = stocks && stocks.length > 0 ? '当前传入股票列表' : '当前持仓 / 自选观察池';
+        const movementData = await loadAbnormalMovementData(displayStocks);
+        const reportContent = buildAbnormalMovementReport(movementData, scope, prompt);
+        const record: ReportRecord = {
+          ...pendingRecord,
+          content: reportContent,
+          status: 'done',
+        };
+
+        setReviewGeneratingTitle(null);
+        setHistoryRecords((prev) => prev.map((item) => item.id === reportId ? record : item));
+        await streamAssistantMessage(reportContent);
+        setIsTyping(false);
+      }, 900);
     } else {
       const prompt = quickPrompts[key] || '';
       setInput(prompt);
       setResultQuery(prompt);
     }
-  };
-
-  const handleTagClick = (tag: string) => {
-    setSelectedStocks((prev) => prev[0] === tag ? [] : [tag]);
   };
 
   const handleReviewSelect = (review: ReviewOption) => {
@@ -466,8 +559,8 @@ export default function AiChatPage({ stocks }: Props) {
     setHistoryRecords((prev) => [pendingRecord, ...prev]);
     setSelectedReport(null);
 
-    setTimeout(() => {
-      const scope = formatSelectedScope(selectedStocks, selectedIndustries, selectedSectors);
+    setTimeout(async () => {
+      const scope = stocks && stocks.length > 0 ? '基于当前传入股票列表生成' : '未选择特定范围，基于全市场样例数据生成';
       const reportContent = buildReviewReport(review, displayStocks, scope);
       const record: ReportRecord = {
         id: reportId,
@@ -477,11 +570,11 @@ export default function AiChatPage({ stocks }: Props) {
         status: 'done',
       };
 
-      setIsTyping(false);
       setReviewGeneratingTitle(null);
-      addMessage('assistant', `已生成《${review.title}报告》，可点击右侧报告记录打开。`);
       setHistoryRecords((prev) => prev.map((item) => item.id === reportId ? record : item));
       setSelectedReport(null);
+      await streamAssistantMessage(`已生成《${review.title}报告》，可点击右侧报告记录打开。`);
+      setIsTyping(false);
     }, 900);
   };
 
@@ -499,101 +592,7 @@ export default function AiChatPage({ stocks }: Props) {
 
   return (
     <div className="flex-1 flex overflow-hidden">
-      <div className="w-56 bg-gradient-to-bl from-indigo-900/30 via-gray-900 to-gray-900 border-r border-gray-700/50 flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-700/50">
-          <h3 className="text-white text-xs font-semibold">选股</h3>
-        </div>
-        <div className="flex-1 overflow-auto scrollbar-thin p-3" style={{ display: 'flex', flexDirection: 'column', gap: '40px' }}>
-          <div>
-            <h4 className="text-neutral text-xs mb-2 font-medium">单只股票</h4>
-            <div className="relative mb-2">
-              <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
-              <input
-                placeholder="输入代码或名称..."
-                className="w-full pl-7 pr-2 py-1.5 text-xs rounded bg-[#12151A] border border-gray-600 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                onKeyDown={(e) => e.key === 'Enter' && handleSend((e.target as HTMLInputElement).value)}
-              />
-            </div>
-            <div className="flex gap-1.5 flex-wrap">
-              {hotTags.map((tag) => (
-                <span
-                  key={tag}
-                  onClick={() => handleTagClick(tag)}
-                  className={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
-                    selectedStocks.includes(tag)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700/50 text-secondary hover:bg-gray-600'
-                  }`}
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h4 className="text-neutral text-xs mb-2 font-medium">行业（万申）</h4>
-            <div className="flex gap-1 flex-wrap">
-              {industries.map((ind) => (
-                <button
-                  key={ind}
-                  onClick={() => toggleArr(setSelectedIndustries, ind)}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${
-                    selectedIndustries.includes(ind)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700/30 text-secondary hover:bg-gray-600'
-                  }`}
-                >
-                  {ind}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h4 className="text-neutral text-xs mb-2 font-medium">板块概念</h4>
-            <div className="flex gap-1 flex-wrap">
-              {sectors.map((sec) => (
-                <button
-                  key={sec}
-                  onClick={() => toggleArr(setSelectedSectors, sec)}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${
-                    selectedSectors.includes(sec)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700/30 text-secondary hover:bg-gray-600'
-                  }`}
-                >
-                  {sec}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h4 className="text-neutral text-xs mb-2 font-medium">持仓股票</h4>
-            <div className="flex gap-1 flex-wrap">
-              {holdingStocks.map((h) => (
-                <span
-                  key={h.证券代码}
-                  onClick={() => handleTagClick(h.证券名称)}
-                  className={`px-2 py-1 text-[10px] rounded cursor-pointer transition-colors ${
-                    selectedStocks.includes(h.证券名称)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700/30 text-secondary hover:bg-gray-600'
-                  }`}
-                >
-                  {h.证券名称}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div className="flex-1 flex flex-col bg-gradient-to-br from-indigo-900/20 via-gray-900 to-blue-900/20">
-        <div className="px-4 py-3 border-b border-gray-700/50">
-          <span className="text-white text-xs font-semibold">分析</span>
-        </div>
         <div className={`flex-1 p-4 ${messages.length > 1 ? 'overflow-auto scrollbar-thin space-y-4' : 'overflow-hidden'}`}>
           {messages.length <= 1 ? (
             <div className="flex flex-col items-center justify-center h-full gap-6 -mt-8">
@@ -653,13 +652,13 @@ export default function AiChatPage({ stocks }: Props) {
                     <span className="text-[10px] text-gray-500">{msg.role === 'assistant' ? 'AI助手' : '我'}</span>
                   </div>
                   <div
-                    className={`px-4 py-2.5 text-xs leading-relaxed animate-[fadeIn_0.3s_ease] whitespace-pre-wrap ${
+                    className={`px-4 py-2.5 text-xs leading-relaxed animate-[fadeIn_0.3s_ease] ${
                       msg.role === 'user'
-                        ? 'bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl rounded-tr-md shadow-md shadow-blue-500/20'
-                        : 'bg-[#1E2230] text-[#E6EDF7] rounded-2xl rounded-tl-md border border-[#2C303A]/50'
+                        ? 'whitespace-pre-wrap bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl rounded-tr-md shadow-md shadow-blue-500/20'
+                        : 'whitespace-normal bg-[#1E2230] text-[#E6EDF7] rounded-2xl rounded-tl-md border border-[#2C303A]/50'
                     }`}
                   >
-                    {msg.content}
+                    {msg.role === 'assistant' ? renderChatContent(msg.content) : msg.content}
                   </div>
                   <span className="text-[10px] text-gray-600 mt-0.5 block">{msg.time}</span>
                 </div>
@@ -672,7 +671,7 @@ export default function AiChatPage({ stocks }: Props) {
             ))
           )}
 
-          {isTyping && (
+          {isTyping && !isStreaming && (
             <div className="flex gap-2.5">
               <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-md shadow-blue-500/20">
                 <Bot size={13} className="text-white" />
@@ -750,7 +749,7 @@ export default function AiChatPage({ stocks }: Props) {
           <>
             <div className="px-4 py-3 border-b border-gray-700/50">
               <div className="flex items-center justify-between">
-                <h3 className="text-white text-xs font-semibold">选股结果</h3>
+                <h3 className="text-white text-xs font-semibold">当前持仓</h3>
                 <span className="text-blue-400 text-xs">
                   {displayStocks.length}{isFiltered ? '个股票' : '只持仓股票'}
                 </span>

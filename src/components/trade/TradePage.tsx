@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { TrendingUp, Flame, Plus } from 'lucide-react';
+import { TrendingUp, Flame, Plus, Eye, Pencil, Trash2, Play, Rocket } from 'lucide-react';
 import { strategyCards, topicCards } from '../../data/tradeData';
 import MembershipModal from './MembershipModal';
 
@@ -68,7 +68,7 @@ export default function TradePage() {
                     <p className="text-secondary text-[10px] mb-2 leading-relaxed">{card.介绍}</p>
                   )}
                   {card.个股 && card.个股.length > 0 && (
-                    <div className="flex gap-2 flex-wrap">
+                    <div className="flex gap-2 flex-wrap mb-3">
                       {card.个股.map((s) => (
                         <div key={s.名称} className="flex items-center gap-1">
                           <span className="text-neutral text-xs">{s.名称}</span>
@@ -79,6 +79,13 @@ export default function TradePage() {
                       ))}
                     </div>
                   )}
+                  <div className="flex gap-1.5 mt-auto pt-2 border-t border-gray-700/50">
+                    <button onClick={(e) => { e.stopPropagation(); setShowMembership(true); }} className="flex-1 py-1.5 text-[10px] rounded bg-gray-800 text-white hover:bg-gray-700 transition-colors"><Eye size={10} className="inline mr-0.5" />查看</button>
+                    <button onClick={(e) => { e.stopPropagation(); setShowMembership(true); }} className="flex-1 py-1.5 text-[10px] rounded bg-gray-800 text-white hover:bg-gray-700 transition-colors"><Pencil size={10} className="inline mr-0.5" />编辑</button>
+                    <button onClick={(e) => { e.stopPropagation(); setShowMembership(true); }} className="flex-1 py-1.5 text-[10px] rounded bg-gray-800 text-white hover:bg-gray-700 transition-colors"><Trash2 size={10} className="inline mr-0.5" />删除</button>
+                    <button onClick={(e) => { e.stopPropagation(); setShowMembership(true); }} className="flex-1 py-1.5 text-[10px] rounded bg-gray-800 text-white hover:bg-gray-700 transition-colors"><Play size={10} className="inline mr-0.5" />模拟</button>
+                    <button onClick={(e) => { e.stopPropagation(); setShowMembership(true); }} className="flex-1 py-1.5 text-[10px] rounded bg-gray-800 text-white hover:bg-gray-700 transition-colors"><Rocket size={10} className="inline mr-0.5" />实盘</button>
+                  </div>
                 </div>
               ))}
             </div>

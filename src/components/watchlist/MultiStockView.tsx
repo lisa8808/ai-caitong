@@ -1,41 +1,64 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Columns, Maximize2, Star, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ComposedChart, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
 import { watchlistStocks } from '../../data/watchlistData';
+import { WatchStock } from '../../types/watchlist';
+import { ChartPoint, loadStockChart } from '../../services/watchlistService';
 
-const periods = ['分时', '五日', '1分', '5分', '15分', '30分', '60分', '日线', '周线', '月线', '季线', '年线'];
+const periods = ['日线', '周线', '月线', '季线', '年线'];
 
 const COLORS = { bg: '#1A1E26', nav: '#1A1E26', divider: '#2A2E36', text: '#E6E9EF', secondary: '#8A919E', up: '#FF4D4F', down: '#36C98C', yellow: '#FFC53D', blue: '#4096FF', fill: 'rgba(64,150,255,0.2)' };
 
-function generateChartData(base: number, pct: number) {
-  const points = 14;
-  const times = ['09:30', '09:45', '10:00', '10:15', '10:30', '10:45', '11:00', '11:15', '11:30', '13:00', '13:30', '14:00', '14:30', '15:00'];
-  const labels = ['09:30', '', '', '', '10:30', '', '', '', '11:30', '', '', '14:00', '', '15:00'];
-  const maxMove = Math.abs(pct) * 2 + 2;
-  const direction = pct >= 0 ? 1 : -1;
+function toApiPeriod(period: string) {
+  const map: Record<string, string> = {
+    分时: '1min',
+    五日: '5日',
+    '1分': '1min',
+    '5分': '5min',
+    '15分': '15min',
+    '30分': '30min',
+    '60分': '60min',
+    日线: '日',
+    周线: '周',
+    月线: '月',
+    季线: '季',
+    年线: '年',
+  };
+  return map[period] || '1min';
+}
 
-  return times.map((t, i) => {
-    const progress = i / (points - 1);
-    const move = Math.sin(progress * Math.PI * 1.5) * maxMove * 0.5 + progress * maxMove * direction * 0.5;
-    const p = base * (1 + move / 100);
-    const avgP = base * (1 + move * 0.7 / 100);
-    const prevP = i > 0 ? base * (1 + (Math.sin((i - 1) / (points - 1) * Math.PI * 1.5) * maxMove * 0.5 + (i - 1) / (points - 1) * maxMove * direction * 0.5) / 100) : p;
+function normalizeChartData(points: ChartPoint[]) {
+  let amount = 0;
+  let volume = 0;
+  return points.map((point, index) => {
+    amount += point.price * point.vol;
+    volume += point.vol;
     return {
-      time: t,
-      label: labels[i],
-      price: Math.round(p * 100) / 100,
-      avg: Math.round(avgP * 100) / 100,
-      vol: Math.round(500 + Math.abs(Math.sin(progress * Math.PI * 3)) * 1500 + (p >= prevP ? Math.random() * 500 : 0)),
+      time: point.time,
+      label: index % Math.max(1, Math.floor(points.length / 4)) === 0 ? point.time : '',
+      price: point.price,
+      avg: volume ? amount / volume : point.price,
+      vol: point.vol,
     };
   });
 }
 
-function MiniChart({ stock }: { stock: typeof watchlistStocks[0] }) {
-  const data = useMemo(() => generateChartData(stock.现价, stock.涨幅), [stock]);
+function MiniChart({ stock, period }: { stock: WatchStock; period: string }) {
+  const [chartPoints, setChartPoints] = useState<ChartPoint[]>([]);
+  const data = useMemo(() => normalizeChartData(chartPoints), [chartPoints]);
+
+  useEffect(() => {
+    let ignore = false;
+    loadStockChart(stock.证券代码, toApiPeriod(period)).then((points) => {
+      if (!ignore) setChartPoints(points);
+    });
+    return () => { ignore = true; };
+  }, [stock.证券代码, period]);
+
   const prices = data.map(d => d.price);
-  const yBot = Math.min(...prices) * 0.98;
-  const yTop = Math.max(...prices) * 1.02;
-  const volMax = Math.max(...data.map(d => d.vol));
+  const yBot = (prices.length ? Math.min(...prices) : stock.最低) * 0.98;
+  const yTop = (prices.length ? Math.max(...prices) : stock.最高) * 1.02;
+  const volMax = Math.max(...data.map(d => d.vol), 1);
   const isUp = stock.涨幅 >= 0;
 
   return (
@@ -65,7 +88,7 @@ function MiniChart({ stock }: { stock: typeof watchlistStocks[0] }) {
               <XAxis dataKey="label" tick={{ fill: '#8A919E', fontSize: 8 }} axisLine={{ stroke: '#2A2E36' }} tickLine={false} />
               <YAxis yAxisId="price" domain={[yBot, yTop]} hide />
               <Tooltip contentStyle={{ backgroundColor: '#1A1E26', border: '1px solid #2A2E36', fontSize: 9, color: '#E6E9EF' }} />
-              <ReferenceLine yAxisId="price" y={stock.现价} stroke="#2A2E36" strokeDasharray="3 3" />
+              <ReferenceLine yAxisId="price" y={data[0]?.price || stock.现价} stroke="#2A2E36" strokeDasharray="3 3" />
               <Area yAxisId="price" type="monotone" dataKey="price" stroke={COLORS.blue} fill={COLORS.fill} strokeWidth={1.2} dot={false} name="现价" />
               <Area yAxisId="price" type="monotone" dataKey="avg" stroke={COLORS.yellow} fill="none" strokeWidth={1} dot={false} name="均价" />
             </ComposedChart>
@@ -87,9 +110,13 @@ function MiniChart({ stock }: { stock: typeof watchlistStocks[0] }) {
   );
 }
 
-export default function MultiStockView() {
-  const [activePeriod, setActivePeriod] = useState('分时');
-  const cols = watchlistStocks.length <= 4 ? 2 : watchlistStocks.length <= 6 ? 3 : 4;
+interface Props {
+  stocks?: WatchStock[];
+}
+
+export default function MultiStockView({ stocks = watchlistStocks }: Props) {
+  const [activePeriod, setActivePeriod] = useState('日线');
+  const cols = stocks.length <= 4 ? 2 : stocks.length <= 6 ? 3 : 4;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: COLORS.bg }}>
@@ -109,9 +136,9 @@ export default function MultiStockView() {
       </div>
 
       <div className="flex-1 overflow-auto scrollbar-thin p-2">
-        <div className={`grid gap-2 h-full`} style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: `calc((100vh - 160px) / ${Math.ceil(watchlistStocks.length / cols)})` }}>
-          {watchlistStocks.map((s) => (
-            <MiniChart key={s.证券代码} stock={s} />
+        <div className={`grid gap-2 h-full`} style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: `calc((100vh - 160px) / ${Math.ceil(stocks.length / cols)})` }}>
+          {stocks.map((s) => (
+            <MiniChart key={s.证券代码} stock={s} period={activePeriod} />
           ))}
         </div>
       </div>

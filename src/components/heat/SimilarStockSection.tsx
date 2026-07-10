@@ -1,13 +1,13 @@
 import { Star } from 'lucide-react';
-import { similarStocks } from '../../data/heatData';
 import { SimilarStock } from '../../types/heat';
 
 interface Props {
+  stocks: SimilarStock[];
   onSelect: (stock: SimilarStock) => void;
   selectedCode?: string;
 }
 
-export default function SimilarStockSection({ onSelect, selectedCode }: Props) {
+export default function SimilarStockSection({ stocks, onSelect, selectedCode }: Props) {
   return (
     <div className="p-3">
       <div className="flex items-center justify-between mb-2">
@@ -16,7 +16,7 @@ export default function SimilarStockSection({ onSelect, selectedCode }: Props) {
       </div>
 
       <div className="space-y-1.5">
-        {similarStocks.map((stock) => (
+        {stocks.map((stock) => (
           <div
             key={stock.代码}
             onClick={() => onSelect(stock)}

@@ -1,5 +1,62 @@
 # 发现与决策
 
+## 财瞳金融整站现状 PRD 发现（2026-07-10）
+
+- 产品现状是金融终端前端原型，覆盖智询、自选、市场、热度、信号、策略、交易、账户 8 个模块。
+- Tushare 动态能力集中于自选/持仓行情、个股详情、热度和异动解读；市场主列表、指数、信号、策略、交易和账户核心数据仍以 Mock/Demo 为主。
+- 智询普通问答不是大模型能力；只有异动解读会调用 Tushare 代理，报告由前端模板生成。
+- 代理默认端口 8787，内存缓存 30 秒，无鉴权、限流、审计和持久缓存。
+- GitHub Pages 只能部署静态前端，生产使用 Tushare 时必须独立部署代理并配置 `VITE_API_BASE_URL`。
+- 用户、账户、自选和持仓主要依赖浏览器 `localStorage`，未按用户隔离；账户资产、持仓和模拟交易未形成统一账本。
+- 移动端有独立入口，但大量复用固定宽度桌面组件，属于功能可达而非完整移动适配。
+- PRD 必须用“已接真实数据并回退 / 前端 Demo / 仅展示占位”三类状态描述功能。
+
+## 自选模块接入 Tushare 发现（2026-07-02）
+
+### 当前数据来源
+| 页面区域 | 当前来源 | 文件/位置 |
+|---|---|---|
+| 自选股票列表 | 静态 mock | `src/data/watchlistData.ts` 的 `watchlistStocks` |
+| 持仓列表 | 静态 mock | `src/data/watchlistData.ts` 的 `holdingStocks` |
+| 右侧个股详情 | 静态 mock | `src/data/watchlistData.ts` 的 `watchDetail` |
+| 资金流向 | 静态 mock | `src/data/watchlistData.ts` 的 `fundFlowData` |
+| 分时图 | 静态 mock | `src/data/watchlistData.ts` 的 `minuteChartData` |
+| 添加自选股搜索 | 组件内静态数组 | `src/components/watchlist/WatchlistPage.tsx` 的 `searchPool` |
+| 多股同列 | 静态自选列表 + 前端随机生成图形 | `src/components/watchlist/MultiStockView.tsx` |
+
+### Tushare 可覆盖的数据
+| 前端字段/内容 | 建议 Tushare 数据 | 备注 |
+|---|---|---|
+| 证券代码、证券名称 | `stock_basic` | 用于搜索、代码名称映射、市场后缀转换 |
+| 现价、涨幅、涨跌、最高、最低 | 实时行情接口优先，日线行情 `daily` 兜底 | Tushare 实时能力和权限需确认 |
+| 换手率 | `daily_basic` | 与交易日行情按 `ts_code + trade_date` 合并 |
+| 自选收益 | 前端/后端计算 | `(现价 - 自选价格) / 自选价格 * 100` |
+| 分时/多股同列图 | 分钟线接口优先，日线/静态走势兜底 | 权限不足时先用日线或已有图形生成逻辑 |
+| 资金流向 | `moneyflow` 或可用资金流接口 | 字段需按实际返回映射 |
+| 持仓市值、盈亏、盈亏率、今日涨幅 | Tushare 当前价 + 用户持仓数据计算 | 持仓数量、成本价不能从 Tushare 获取 |
+
+### 关键约束
+- 当前项目是 Vite 静态前端，不能把 Tushare token 放到浏览器环境，否则会泄露。
+- 需要新增服务端代理层，由服务端读取 `TUSHARE_TOKEN` 并调用 Tushare。
+- 用户已确认前端继续部署到 GitHub Pages，因此需要额外部署 API 服务或 Serverless Function。
+- Tushare 返回通常使用 `ts_code`，前端当前使用纯数字代码，需要统一转换，例如 `600519` -> `600519.SH`、`000001` -> `000001.SZ`、`688318` -> `688318.SH`。
+- 用户已确认自选列表、添加日期、添加价格、持仓数量、成本价第一版保存在当前浏览器，后续再考虑账号同步。
+
+### 推荐架构决策
+| 决策 | 理由 |
+|---|---|
+| 新增后端/Serverless 代理 `/api/tushare/*` | 保护 token，统一限流、缓存、错误处理 |
+| 前端新增 `watchlistService` | 隔离 UI 与数据来源，便于 mock/Tushare 切换 |
+| 保留 mock fallback | Tushare token 缺失、接口失败或额度不足时页面仍可用 |
+| 增加 `localStorage` 用户数据层 | 第一版管理自选股、持仓数量、成本价、自选价格 |
+| 对行情接口做短缓存 | 降低 Tushare 频率消耗，提升页面响应 |
+
+### 已确认实施方向
+- 前端：继续 GitHub Pages 静态部署。
+- 后端：新增独立 Tushare API 代理，通过 `VITE_API_BASE_URL` 连接前端。
+- 用户数据：第一版用当前浏览器 `localStorage` 保存。
+- 安全：`TUSHARE_TOKEN` 只放在代理服务环境变量中，不进入前端构建产物。
+
 ## 需求
 财瞳金融PC终端市场模块，1:1复刻通达信金融终端深色模式：
 - 顶部全局标题栏 + 导航栏（一级+二级标签）

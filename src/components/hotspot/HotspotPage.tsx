@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import HotspotFilter from './HotspotFilter';
 import HotspotTable from './HotspotTable';
 import { hotspotData } from '../../data/hotspotData';
-import { HotspotItem, HotspotSource } from '../../types/hotspot';
+import { HotspotItem } from '../../types/hotspot';
 
 function deduplicate(data: HotspotItem[]): HotspotItem[] {
   const seen = new Set<string>();
@@ -17,7 +17,7 @@ function deduplicate(data: HotspotItem[]): HotspotItem[] {
 export default function HotspotPage() {
   const [startDate, setStartDate] = useState('2026/05/20');
   const [endDate, setEndDate] = useState('2026/05/21');
-  const [source, setSource] = useState<HotspotSource>('全部');
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [sortAsc, setSortAsc] = useState(false);
   const [baseData, setBaseData] = useState<HotspotItem[]>(() => deduplicate(hotspotData));
 
@@ -33,7 +33,7 @@ export default function HotspotPage() {
       const s = startDate.replace(/-/g, '/');
       const e = endDate.replace(/-/g, '/');
       if (itemDate < s || itemDate > e) return false;
-      if (source !== '全部' && item.来源 !== source) return false;
+      if (selectedSources.size > 0 && !selectedSources.has(item.来源)) return false;
       return true;
     });
     setBaseData(result);
@@ -44,11 +44,11 @@ export default function HotspotPage() {
       <HotspotFilter
         startDate={startDate}
         endDate={endDate}
-        source={source}
+        selectedSources={selectedSources}
         sortAsc={sortAsc}
         onStartDateChange={setStartDate}
         onEndDateChange={setEndDate}
-        onSourceChange={setSource}
+        onSourcesChange={setSelectedSources}
         onSortToggle={() => setSortAsc(!sortAsc)}
         onQuery={handleQuery}
       />

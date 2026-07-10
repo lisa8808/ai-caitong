@@ -1,16 +1,16 @@
 import { useState } from 'react';
-import { heatStocks } from '../../data/heatData';
 import { HeatStock } from '../../types/heat';
 
 interface Props {
+  stocks: HeatStock[];
   onSelectStock: (stock: HeatStock) => void;
   selectedCode?: string;
 }
 
-export default function LimitUpTable({ onSelectStock, selectedCode }: Props) {
+export default function LimitUpTable({ stocks, onSelectStock, selectedCode }: Props) {
   const [filter, setFilter] = useState<'all' | '2' | '1' | '炸板'>('all');
 
-  const filteredStocks = heatStocks.filter((s) => {
+  const filteredStocks = stocks.filter((s) => {
     if (filter === '2') return s.连板数 >= 2;
     if (filter === '1') return s.连板数 === 1;
     if (filter === '炸板') return s.开板次数 > 3;

@@ -44,6 +44,7 @@ export interface SentimentData {
   最高板: number;
   涨停家数: number;
   跌停家数: number;
+  热度: number;
 }
 
 export interface GlobalStock {

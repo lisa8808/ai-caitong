@@ -1,0 +1,20 @@
+{
+  "skill_name": "a-stock-review-summary",
+  "evals": [
+    {
+      "id": "market_review",
+      "prompt": "帮我复盘今天的A股市场，包括指数、成交额、涨跌家数和资金流向。",
+      "expected_output": "输出可归档市场复盘报告，包含报告信息、核心结论、主体复盘、明日观察、风险免责声明。"
+    },
+    {
+      "id": "sector_hotspots",
+      "prompt": "总结今天板块热点，分析涨幅前三板块和龙头个股。",
+      "expected_output": "输出板块热点报告，包含板块表格、驱动原因、热度性质和观察点。"
+    },
+    {
+      "id": "operation_review_missing_data",
+      "prompt": "帮我总结今日操作情况，但是没有上传交易记录。",
+      "expected_output": "输出操作复盘框架，交易数据缺失处标注待补充，不编造交易记录。"
+    }
+  ]
+}
