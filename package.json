@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "start:local": "./start.sh",
     "dev": "concurrently -n vite,api -c blue,green \"vite --host 0.0.0.0\" \"node server/tushare-proxy.mjs\"",
     "dev:api": "node server/tushare-proxy.mjs",
     "build": "tsc -b && vite build",
