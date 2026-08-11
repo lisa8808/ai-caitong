@@ -1,13 +1,18 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, Bot, User, BarChart3, TrendingUp, Activity, ClipboardList, Target, ShieldAlert, Loader2, FileText, X } from 'lucide-react';
+import { Send, Bot, User, TrendingUp, Activity, ClipboardList, Target, ShieldAlert, Loader2, FileText, X, BadgeDollarSign } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AiReviewModal, { ReviewOption } from './AiReviewModal';
 import { StockItem } from '../../types';
 import { holdingStocks } from '../../data/watchlistData';
 import { AbnormalMovementData, AbnormalMovementStock, loadAbnormalMovementData } from '../../services/abnormalMovementService';
-import abnormalMovementSkill from '../../../skills/abnormal_movement/SKILL.md?raw';
-import abnormalReportTemplate from '../../../skills/abnormal_movement/assets/abnormal-report-template.md?raw';
+import { loadValueInvestingCommitteeReport } from '../../services/valueInvestingCommitteeService';
+import { loadHoldingStocks } from '../../services/watchlistService';
+import { loadStockSelectionReport } from '../../services/stockSelectionService';
+
+const ABNORMAL_MOVEMENT_SKILL_NAME = 'fi_abnormal_movement';
+const ABNORMAL_MOVEMENT_SKILL_TITLE = 'A股异动解读与归因分析 Skill';
+const ABNORMAL_REPORT_TITLE = '异动解读报告';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -54,8 +59,8 @@ const quickActions = [
   { icon: Target, label: '标的筛选', key: '筛选' },
   { icon: Activity, label: '异动解读', key: '异动' },
   { icon: TrendingUp, label: '趋势判断', key: '趋势' },
+  { icon: BadgeDollarSign, label: '价值分析', key: '价值' },
   { icon: ClipboardList, label: '复盘总结', key: '复盘' },
-  { icon: BarChart3, label: '策略选择', key: '策略' },
   { icon: ShieldAlert, label: '风控提示', key: '风控' },
 ];
 
@@ -68,6 +73,269 @@ function getDateTime() {
   const d = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatReportValue(value: unknown, digits = 2) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value.toFixed(digits);
+  return value === null || value === undefined || value === '' ? '缺失' : String(value);
+}
+
+function safeCell(value: unknown) {
+  return formatReportValue(value).replace(/\|/g, '/').replace(/\s*\n+\s*/g, '；').replace(/\s{2,}/g, ' ');
+}
+
+function tableRows(rows: Array<Array<unknown>>) {
+  return rows.map((row) => `| ${row.map(safeCell).join(' |')} |`);
+}
+
+function buildExpertConclusion(key: string, metrics: Record<string, any>, chair: Record<string, any>, profile: ReturnType<typeof getReportBusinessProfile>) {
+  const verdict = chair.verdict || '观察 / 需要验证';
+  const pe = formatReportValue(metrics.pe);
+  const pb = formatReportValue(metrics.pb);
+  const cash = metrics.operating_cash_flow
+    ? `经营现金流总额 ${formatReportValue(metrics.operating_cash_flow, 0)}`
+    : `仅有每股经营现金流 proxy ${formatReportValue(metrics.operating_cash_flow_per_share)}，经营现金流总额待补`;
+  const firstRisk = profile.risks[0] || '关键风险待验证';
+  const firstMoat = profile.moats[0] || '护城河待验证';
+  const firstSegment = profile.segments[0]?.[0] || '核心业务';
+
+  if (key === 'buffett') {
+    return `${verdict}。认可的前提是 ${firstMoat} 能转化为稳定现金流；当前 PE ${pe}、PB ${pb}，${cash}，资本开支仍需补齐后才能确认 owner earnings 和安全边际。`;
+  }
+  if (key === 'munger') {
+    return `核心结论是先防错：最大反证来自 ${firstRisk}。若利润不能持续转化为自由现金流，或资本开支拖累回报，应降低估值倍数和仓位。`;
+  }
+  if (key === 'duan_yongping') {
+    return `核心结论是先判断 ${firstSegment} 是否是好生意、管理层是否值得托付。只有产品需求、用户口碑、现金流和价格同时过关，才适合进入买入讨论。`;
+  }
+  if (key === 'li_lu') {
+    return `核心结论是验证十年确定性：公司必须在产业趋势、组织能力和复利再投资上持续变强；若关键验证节点无法兑现，长期情景估值需要下修。`;
+  }
+  return verdict;
+}
+
+function getReportBusinessProfile(data: { company: string; symbol: string; result?: Record<string, any> }) {
+  if (data.symbol === '01810.HK' || data.company.includes('小米')) {
+    return {
+      archetype: '消费电子 + AIoT + 智能电动车平台型制造公司',
+      segments: [
+        ['智能手机', '核心规模入口，贡献硬件收入和全球渠道基础', '出货量、ASP、毛利率、高端化占比、库存周转'],
+        ['IoT与生活消费产品', '扩展用户场景和硬件生态，提高用户黏性', '品类增长、毛利率、渠道效率、生态联动'],
+        ['互联网服务', '高毛利利润池，验证硬件用户规模能否转化为现金流', 'MAU、ARPU、广告/游戏/金融科技收入、毛利率'],
+        ['智能电动车', '第二增长曲线，但资本开支和竞争强度高', '交付量、单车毛利、订单持续性、研发和工厂投入回报'],
+        ['AI与操作系统生态', '提高终端体验和多设备协同，决定长期差异化', '澎湃OS活跃设备、AI功能留存、生态开发者与服务收入'],
+      ],
+      moats: [
+        '全球消费电子品牌与渠道规模',
+        '手机 + IoT + 汽车的多终端生态协同',
+        '互联网服务高毛利利润池',
+        '供应链效率和性价比心智',
+        '创始人长期投入与组织执行力',
+      ],
+      risks: [
+        '智能手机行业成熟、竞争激烈，硬件毛利率受压',
+        '汽车业务仍处投入期，若规模或毛利不达预期会拖累自由现金流',
+        'IoT品类扩张可能带来库存和渠道效率压力',
+        '互联网服务增长依赖设备活跃与用户时长',
+        '资本开支、研发投入和股东回报之间需要持续平衡',
+      ],
+      validationNodes: [
+        '分部收入和毛利率',
+        '智能手机高端化与海外份额',
+        'IoT库存和周转',
+        '互联网服务ARPU和毛利',
+        '汽车交付量、单车毛利和订单持续性',
+        '经营现金流、资本开支、自由现金流',
+      ],
+    };
+  }
+
+  const profile = data.result?.profile || {};
+  return {
+    archetype: profile.archetype || '待验证的上市公司',
+    segments: (profile.segments || []).map((segment: string, index: number) => [
+      segment,
+      '判断是否能持续贡献现金流和再投资机会',
+      (profile.validation_nodes || [])[index % Math.max((profile.validation_nodes || []).length, 1)] || '收入结构、毛利率、现金流',
+    ]),
+    moats: profile.moats || [],
+    risks: profile.risks || [],
+    validationNodes: profile.validation_nodes || [],
+  };
+}
+
+function buildCompactValueReport(data: { company: string; symbol: string; market: string; result?: Record<string, any>; report: string }) {
+  const result = data.result || {};
+  const metrics = result.metrics || {};
+  const valuation = result.valuation || {};
+  const chair = result.chair || {};
+  const audit = result.audit || chair.audit || {};
+  const valuationMetrics = valuation.valuation_metrics || {};
+  const threeYear = Array.isArray(valuation.three_year_scenarios) ? valuation.three_year_scenarios : [];
+  const tenYear = Array.isArray(valuation.ten_year_scenarios) ? valuation.ten_year_scenarios : [];
+  const sources = Array.isArray(result.sources) ? result.sources : [];
+  const gaps = Array.isArray(result.data_gaps) ? result.data_gaps : [];
+  const consensus = Array.isArray(chair.consensus) ? chair.consensus : [];
+  const contradictions = Array.isArray(chair.contradictions) ? chair.contradictions : [];
+  const redLines = Array.isArray(chair.red_lines) ? chair.red_lines : [];
+  const actions = Array.isArray(chair.actions) ? chair.actions : [];
+  const actionFramework = Array.isArray(chair.action_framework) ? chair.action_framework : [];
+  const priceDiscipline = Array.isArray(chair.price_discipline) ? chair.price_discipline : [];
+  const thesisBroken = Array.isArray(chair.thesis_broken) ? chair.thesis_broken : [];
+  const diligenceQuestions = Array.isArray(chair.diligence_questions) ? chair.diligence_questions : [];
+  const auditItems = Array.isArray(audit.items) ? audit.items : [];
+  const committee = result.committee || {};
+  const profile = getReportBusinessProfile(data);
+  const filteredGaps = gaps.filter((gap: string) => !(
+    gap.includes('经营现金流总额') && metrics.operating_cash_flow_per_share
+  ));
+
+  const sourceLines = sources.map((source: any) => (
+    `- ${source.kind || 'source'} / ${source.provider || 'unknown'}${source.statement ? ` / ${source.statement}` : ''}${source.endpoint ? ` / ${source.endpoint}` : ''}${source.ok === false ? ` / 未命中：${source.warning || 'unknown'}` : ''}`
+  ));
+  const searchEvidence = Array.isArray(result.sources)
+    ? sources.filter((source: any) => source.kind === 'search' && source.ok !== false)
+    : [];
+  const sentimentRows = searchEvidence.length
+    ? searchEvidence.map((source: any) => [source.provider || 'search', source.query || '舆情/公告/研报搜索', '已命中', source.endpoint || source.url || '见 evidence.search'])
+    : [
+      ['公告', 'HKEX 披露易 / 公司公告', '待接入解析', '用于识别回购、分红、股权激励、重大合同、诉讼与监管事件'],
+      ['年报/业绩会', '公司 IR / 年报 / 中报 / 业绩演示', '待接入解析', '用于补充管理层口径、业务分部、资本开支、经营现金流解释'],
+      ['研报', '券商研报 / 行业研究', '待接入解析', '用于补充行业格局、竞争强度、估值假设和风险事件'],
+      ['新闻舆情', '新闻源 / 搜索源', '当前缺少可用搜索源', '用于识别近期负面事件、产品口碑、监管变化和市场情绪'],
+    ];
+  const metricRows = [
+    ['latest_date', '最新交易日', metrics.latest_date],
+    ['latest_price', '最新价格', metrics.latest_price],
+    ['period_return', '样本期涨跌', typeof metrics.period_return === 'number' ? `${formatReportValue(metrics.period_return * 100)}%` : metrics.period_return],
+    ['eps', 'EPS（估值口径）', metrics.eps],
+    ['eps_reported', 'EPS（原始口径）', metrics.eps_reported],
+    ['bvps', 'BVPS（估值口径）', metrics.bvps],
+    ['bvps_reported', 'BVPS（原始口径）', metrics.bvps_reported],
+    ['financial_currency', '财报币种', metrics.financial_currency],
+    ['fx_to_price_currency', '估值换算系数', metrics.fx_to_price_currency],
+    ['pe', 'PE', metrics.pe],
+    ['pb', 'PB', metrics.pb],
+    ['revenue', '收入', typeof metrics.revenue === 'number' ? `${formatReportValue(metrics.revenue / 100000000)}亿` : metrics.revenue],
+    ['net_profit', '净利润', typeof metrics.net_profit === 'number' ? `${formatReportValue(metrics.net_profit / 100000000)}亿` : metrics.net_profit],
+    ['operating_cash_flow', '经营现金流总额', metrics.operating_cash_flow],
+    ['operating_cash_flow_per_share', '每股经营现金流', metrics.operating_cash_flow_per_share],
+    ['operating_cash_flow_per_share_reported', '每股经营现金流（原始口径）', metrics.operating_cash_flow_per_share_reported],
+    ['capex', '资本开支', metrics.capex],
+    ['owner_earnings_proxy', 'Owner earnings proxy', metrics.owner_earnings_proxy],
+    ['fcf_per_share_proxy', 'FCF/share proxy', metrics.fcf_per_share_proxy],
+    ['report_marker', '财报标记', metrics.report_marker],
+    ['market_rows', '行情样本行数', metrics.market_rows],
+  ];
+  const valuationRows = Object.entries(valuationMetrics).map(([key, value]) => [key, value]);
+  const scenarioRows = [...threeYear, ...tenYear].map((row: any) => [
+    `${row.years}年-${row.scenario}`,
+    typeof row.eps_cagr === 'number' ? `${formatReportValue(row.eps_cagr * 100)}%` : row.eps_cagr,
+    row.exit_pe,
+    row.future_eps,
+    row.target_price,
+    typeof row.total_return === 'number' ? `${formatReportValue(row.total_return * 100)}%` : row.total_return,
+    typeof row.annualized_return === 'number' ? `${formatReportValue(row.annualized_return * 100)}%` : row.annualized_return,
+  ]);
+  const committeeRows = ['buffett', 'munger', 'duan_yongping', 'li_lu']
+    .map((key) => [key, committee[key]])
+    .filter(([, item]) => Boolean(item))
+    .map(([key, item]: any[]) => {
+      const dimensions: Record<string, string> = {
+        buffett: '护城河、Owner Earnings、安全边际',
+        munger: '逆向思考、失败路径、永久亏损风险',
+        duan_yongping: '生意模式、管理层、企业文化、价格',
+        li_lu: '十年确定性、产业趋势、复利能力',
+      };
+      return [
+        item.title,
+        dimensions[key] || item.stance || '专家维度',
+        buildExpertConclusion(key, metrics, chair, profile),
+      ];
+    });
+  const cashFlowLine = metrics.operating_cash_flow
+    ? `经营现金流总额 ${formatReportValue(metrics.operating_cash_flow, 0)}`
+    : `经营现金流总额缺失；每股经营现金流 proxy ${formatReportValue(metrics.operating_cash_flow_per_share)} 已取得`;
+
+  return [
+    `# ${data.company}（${data.symbol}）价值分析记录`,
+    '',
+    '## 客观结论',
+    `- 结论：${result.verdict || chair.verdict || '缺失'}`,
+    `- 置信度：${result.confidence || chair.confidence || '缺失'}`,
+    `- 市场：${data.market}`,
+    `- 评估日：${result.as_of || '缺失'}`,
+    `- 公司类型：${profile.archetype}`,
+    ...(actions.length ? actions.map((item: string) => `- 动作建议：${item}`) : []),
+    '',
+    '## 估值情景证据',
+    '| 情景 | EPS CAGR | 退出PE | 未来EPS | 目标价 | 总回报 | 年化 |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    ...(scenarioRows.length ? tableRows(scenarioRows) : ['| 缺失 | 缺失 | 缺失 | 缺失 | 缺失 | 缺失 | 缺失 |']),
+    '',
+    '## 核心数据举证',
+    `- 最新价格：${formatReportValue(metrics.latest_price)}`,
+    `- PE / PB：${formatReportValue(metrics.pe)} / ${formatReportValue(metrics.pb)}`,
+    `- EPS / BVPS：${formatReportValue(metrics.eps)} / ${formatReportValue(metrics.bvps)}`,
+    `- 收入：${typeof metrics.revenue === 'number' ? `${formatReportValue(metrics.revenue / 100000000)}亿` : '缺失'}`,
+    `- 现金流：${cashFlowLine}`,
+    `- 资本开支：${metrics.capex ? formatReportValue(metrics.capex, 0) : '缺失，需年报现金流量表/附注继续核验'}`,
+    `- 审计门：${audit.verdict || '缺失'}（pass ${audit.pass_count ?? 0} / warn ${audit.warn_count ?? 0} / fail ${audit.fail_count ?? 0}）`,
+    `- 估值证据：盈利收益率 ${formatReportValue(valuationMetrics.earnings_yield_pct)}%，P/FCF proxy ${formatReportValue(valuationMetrics.P_FCF_proxy)}`,
+    '',
+    '### 完整指标底稿',
+    '| 字段 | 指标 | 数值 |',
+    '| --- | --- | --- |',
+    ...tableRows(metricRows),
+    '',
+    '### 估值指标底稿',
+    '| 指标 | 数值 |',
+    '| --- | --- |',
+    ...(valuationRows.length ? tableRows(valuationRows) : ['| 缺失 | 缺失 |']),
+    '',
+    '### 审计明细',
+    '| 检查项 | 标签 | 值 | 要求 | 结论 |',
+    '| --- | --- | --- | --- | --- |',
+    ...(auditItems.length ? tableRows(auditItems.map((item: any) => [item.id, item.label, item.value, item.required ? '必需' : '可选', item.verdict])) : ['| 缺失 | 缺失 | 缺失 | 缺失 | 缺失 |']),
+    '## 业务/利润池结论',
+    '| 业务/利润池 | 结论 | 关键验证 |',
+    '| --- | --- | --- |',
+    ...profile.segments.map(([segment, conclusion, verification]: string[]) => `| ${segment} | ${conclusion} | ${verification} |`),
+    '',
+    '## 护城河与风险',
+    ...(profile.moats.length ? profile.moats.map((item: string) => `- 护城河：${item}`) : ['- 护城河：缺失']),
+    ...(profile.risks.length ? profile.risks.map((item: string) => `- 风险：${item}`) : ['- 风险：缺失']),
+    '',
+    '## 舆情/事件证据',
+    '| 来源类型 | 数据源/检索方向 | 当前状态 | 投研用途 |',
+    '| --- | --- | --- | --- |',
+    ...tableRows(sentimentRows),
+    '',
+    '## 委员会结论与举证',
+    ...(consensus.length ? consensus.map((item: string) => `- 共识：${item}`) : ['- 共识：缺失']),
+    ...(contradictions.length ? contradictions.map((item: string) => `- 矛盾：${item}`) : ['- 矛盾：缺失']),
+    ...(redLines.length ? redLines.map((item: string) => `- 红线：${item}`) : []),
+    '',
+    '### 四委员逐项判断',
+    '| 专家 | 分析维度 | 结论 |',
+    '| --- | --- | --- |',
+    ...(committeeRows.length ? tableRows(committeeRows) : ['| 缺失 | 缺失 | 缺失 |']),
+    '',
+    '### 主席执行框架',
+    ...(actionFramework.length ? actionFramework.map((item: string) => `- ${item}`) : ['- 缺失']),
+    '',
+    '### 价格纪律',
+    ...(priceDiscipline.length ? priceDiscipline.map((item: string) => `- ${item}`) : ['- 缺失']),
+    '',
+    '## 证据来源',
+    ...(sourceLines.length ? sourceLines : ['- 缺失']),
+    '',
+    '## 待验证',
+    ...(filteredGaps.length ? filteredGaps.map((item: string) => `- ${item}`) : ['- 暂无显式数据缺口']),
+    ...(profile.validationNodes.length ? profile.validationNodes.map((item: string) => `- 验证节点：${item}`) : []),
+    ...(thesisBroken.length ? thesisBroken.map((item: string) => `- 投资假设击穿：${item}`) : []),
+    ...(diligenceQuestions.length ? diligenceQuestions.map((item: string) => `- 尽调问题：${item}`) : []),
+  ].join('\n');
 }
 
 function getStockSeed(stock: StockItem) {
@@ -136,7 +404,7 @@ function renderChatContent(content: string) {
         h2: ({ children }) => <h2 className="mb-2 mt-5 border-l-2 border-blue-400 pl-2 text-sm font-semibold text-blue-200 first:mt-0">{children}</h2>,
         h3: ({ children }) => <h3 className="mb-1.5 mt-4 text-xs font-semibold text-blue-100">{children}</h3>,
         h4: ({ children }) => <h4 className="mb-1 mt-3 font-semibold text-[#E6EDF7]">{children}</h4>,
-        p: ({ children }) => <p className="my-2 leading-6 first:mt-0 last:mb-0">{children}</p>,
+        p: ({ children }) => <p className="my-2 max-w-full [overflow-wrap:anywhere] leading-6 first:mt-0 last:mb-0">{children}</p>,
         ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5 marker:text-blue-400">{children}</ul>,
         ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5 marker:text-blue-300">{children}</ol>,
         li: ({ children }) => <li className="pl-1 leading-5">{children}</li>,
@@ -144,12 +412,12 @@ function renderChatContent(content: string) {
         blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-blue-400/70 bg-blue-500/5 px-3 py-1 text-gray-300">{children}</blockquote>,
         a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-blue-400 underline underline-offset-2 hover:text-blue-300">{children}</a>,
         hr: () => <hr className="my-4 border-gray-700" />,
-        pre: ({ children }) => <pre className="my-3 max-w-full overflow-x-auto rounded-lg bg-[#11141B] p-3 text-[11px] leading-5 text-gray-200">{children}</pre>,
+        pre: ({ children }) => <pre className="my-3 max-w-full overflow-x-auto whitespace-pre-wrap rounded-lg bg-[#11141B] p-3 text-[11px] leading-5 text-gray-200">{children}</pre>,
         code: ({ children, className }) => className
           ? <code className={className}>{children}</code>
           : <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-blue-200">{children}</code>,
         table: ({ children }) => (
-          <div className="my-3 max-w-full overflow-x-auto rounded-lg border border-gray-600/70">
+          <div className="my-3 w-full max-w-full overflow-x-auto rounded-lg border border-gray-600/70">
             <table className="min-w-max w-full border-collapse text-[11px]">{children}</table>
           </div>
         ),
@@ -195,8 +463,8 @@ function buildAbnormalMovementReport(movementData: AbnormalMovementData, scope: 
   const abnormalStocks = [...movementData.stocks]
     .sort((a, b) => Math.abs(b.涨幅) - Math.abs(a.涨幅))
     .slice(0, 5);
-  const skillTitle = abnormalMovementSkill.match(/^#\s+(.+)$/m)?.[1] || 'A股异动解读与归因分析 Skill';
-  const templateTitle = abnormalReportTemplate.match(/^#\s+(.+)$/m)?.[1] || '异动解读报告';
+  const skillTitle = ABNORMAL_MOVEMENT_SKILL_TITLE;
+  const templateTitle = ABNORMAL_REPORT_TITLE;
 
   if (abnormalStocks.length === 0) {
     return '【当前全市场无涨跌幅异常标的，无异动解读内容】';
@@ -234,7 +502,7 @@ function buildAbnormalMovementReport(movementData: AbnormalMovementData, scope: 
 - 交易日期：${movementData.tradeDate || '最新可用交易日'}
 - 数据来源：${movementData.source}${movementData.isRealData ? '' : '（接口不可用时回退）'}
 - 触发来源：智询界面 / 异动解读快捷动作
-- 调用技能：skills/abnormal_movement（${skillTitle}）
+- 调用技能：${ABNORMAL_MOVEMENT_SKILL_NAME}（${skillTitle}）
 - 用户输入：${userInput}
 - 生成说明：优先动态拉取真实行情、成交额、换手率、量比和资金流字段，再按 ${templateTitle} 模板生成；接口不可用时才回退到当前页面行情。
 
@@ -382,23 +650,31 @@ interface Props {
   stocks?: StockItem[];
 }
 
-export default function AiChatPage({ stocks }: Props) {
-  const defaultStocks: StockItem[] = holdingStocks.map((h) => ({
-    序号: h.序号,
-    证券代码: h.证券代码,
-    证券名称: h.证券名称,
-    现价: h.现价,
-    涨幅: h.今日涨幅,
+function holdingToStockItem(holding: typeof holdingStocks[number]): StockItem {
+  return {
+    序号: holding.序号,
+    证券代码: holding.证券代码,
+    证券名称: holding.证券名称,
+    现价: holding.现价,
+    涨幅: holding.今日涨幅,
     涨跌: 0,
     涨速: 0,
     换手: 0,
-    最高: h.现价,
-    最低: h.现价,
-    今开: h.现价,
-    昨收: h.现价,
+    最高: holding.现价,
+    最低: holding.现价,
+    今开: holding.现价,
+    昨收: holding.现价,
     量比: 0,
-  }));
-  const displayStocks = useMemo(() => stocks && stocks.length > 0 ? [...stocks] : [...defaultStocks], [stocks]);
+  };
+}
+
+export default function AiChatPage({ stocks }: Props) {
+  const defaultStocks = useMemo(() => holdingStocks.map(holdingToStockItem), []);
+  const [liveHoldingStocks, setLiveHoldingStocks] = useState<StockItem[]>(defaultStocks);
+  const displayStocks = useMemo(
+    () => stocks && stocks.length > 0 ? [...stocks] : liveHoldingStocks,
+    [liveHoldingStocks, stocks],
+  );
   const isFiltered = !!stocks;
 
   const [messages, setMessages] = useState<Message[]>([
@@ -423,6 +699,7 @@ export default function AiChatPage({ stocks }: Props) {
     筛选: '帮我筛选PE低于20的高成长电子股',
     异动: '今天券商板块为什么异动？',
     趋势: '分析一下当前大盘趋势和支撑位',
+    价值: '分析腾讯(00700.HK):巴菲特看护城河和价格、芒格做逆向、段永平看生意和人、李录看十年确定性,主席综合共识和矛盾',
     复盘: '帮我复盘今天的市场情况',
     策略: '给我一个当前市场的配置策略建议',
     风控: '当前市场有哪些风险需要注意？',
@@ -431,6 +708,26 @@ export default function AiChatPage({ stocks }: Props) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
   }, [messages, isTyping, isStreaming, reviewGeneratingTitle]);
+
+  useEffect(() => {
+    if (stocks && stocks.length > 0) return undefined;
+    let active = true;
+    const refreshHoldings = async () => {
+      const holdings = await loadHoldingStocks(holdingStocks.map((holding) => ({
+        证券代码: holding.证券代码,
+        证券名称: holding.证券名称,
+        持仓数量: holding.持仓数量,
+        成本价: holding.成本价,
+      })));
+      if (active) setLiveHoldingStocks(holdings.map(holdingToStockItem));
+    };
+    void refreshHoldings();
+    const refreshTimer = window.setInterval(refreshHoldings, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+    };
+  }, [stocks]);
 
   useEffect(() => () => {
     if (streamTimerRef.current !== null) window.clearInterval(streamTimerRef.current);
@@ -468,6 +765,42 @@ export default function AiChatPage({ stocks }: Props) {
     setInput('');
     setIsTyping(true);
     setReviewGeneratingTitle(null);
+
+    if (trimmedText.includes('价值分析') || trimmedText.includes('巴菲特') || trimmedText.includes('芒格') || trimmedText.includes('段永平') || trimmedText.includes('李录')) {
+      setTimeout(async () => {
+        try {
+          const data = await loadValueInvestingCommitteeReport(trimmedText);
+          await streamAssistantMessage(data.report);
+          const compactReport = buildCompactValueReport(data);
+          const record: ReportRecord = {
+            summary: `${data.company}价值投资委员会报告`,
+            time: getDateTime(),
+            content: compactReport,
+          };
+          setHistoryRecords((prev) => [record, ...prev]);
+          setSelectedReport(record);
+        } catch (error) {
+          await streamAssistantMessage(`价值分析生成失败：${error instanceof Error ? error.message : '未知错误'}`);
+        } finally {
+          setIsTyping(false);
+        }
+      }, 300);
+      return;
+    }
+
+    if (/筛选|选股|找.*股|低估值|高成长/.test(trimmedText)) {
+      setTimeout(async () => {
+        try {
+          const data = await loadStockSelectionReport(trimmedText);
+          await streamAssistantMessage(data.content);
+        } catch (error) {
+          await streamAssistantMessage(`标的筛选失败：${error instanceof Error ? error.message : '未知错误'}`);
+        } finally {
+          setIsTyping(false);
+        }
+      }, 300);
+      return;
+    }
 
     const matchedKey = Object.keys(botReplies).find((k) => trimmedText.includes(k));
     const reply = botReplies[matchedKey || ''] || botReplies.default;
@@ -591,9 +924,9 @@ export default function AiChatPage({ stocks }: Props) {
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden">
-      <div className="flex-1 flex flex-col bg-gradient-to-br from-indigo-900/20 via-gray-900 to-blue-900/20">
-        <div className={`flex-1 p-4 ${messages.length > 1 ? 'overflow-auto scrollbar-thin space-y-4' : 'overflow-hidden'}`}>
+    <div className="flex-1 flex min-w-0 overflow-hidden">
+      <div className="min-w-0 flex-1 flex flex-col bg-gradient-to-br from-indigo-900/20 via-gray-900 to-blue-900/20">
+        <div className={`min-w-0 flex-1 p-4 ${messages.length > 1 ? 'overflow-auto scrollbar-thin space-y-4' : 'overflow-hidden'}`}>
           {messages.length <= 1 ? (
             <div className="flex flex-col items-center justify-center h-full gap-6 -mt-8">
               {/* Logo */}
@@ -641,21 +974,21 @@ export default function AiChatPage({ stocks }: Props) {
             </div>
           ) : (
             messages.map((msg, idx) => (
-              <div key={idx} className={`flex gap-2.5 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+              <div key={idx} className={`flex min-w-0 gap-2.5 ${msg.role === 'user' ? 'justify-end' : ''}`}>
                 {msg.role === 'assistant' && (
                   <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 mt-0.5 shadow-md shadow-blue-500/20">
                     <Bot size={13} className="text-white" />
                   </div>
                 )}
-                <div className={`${msg.role === 'user' ? 'items-end' : ''} max-w-[78%]`}>
+                <div className={`${msg.role === 'user' ? 'items-end' : ''} min-w-0 max-w-[78%]`}>
                   <div className="flex items-center gap-1.5 mb-1">
                     <span className="text-[10px] text-gray-500">{msg.role === 'assistant' ? 'AI助手' : '我'}</span>
                   </div>
                   <div
-                    className={`px-4 py-2.5 text-xs leading-relaxed animate-[fadeIn_0.3s_ease] ${
+                    className={`max-w-full overflow-hidden px-4 py-2.5 text-xs leading-relaxed animate-[fadeIn_0.3s_ease] ${
                       msg.role === 'user'
-                        ? 'whitespace-pre-wrap bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl rounded-tr-md shadow-md shadow-blue-500/20'
-                        : 'whitespace-normal bg-[#1E2230] text-[#E6EDF7] rounded-2xl rounded-tl-md border border-[#2C303A]/50'
+                        ? 'whitespace-pre-wrap break-words bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-2xl rounded-tr-md shadow-md shadow-blue-500/20'
+                        : 'whitespace-normal break-words bg-[#1E2230] text-[#E6EDF7] rounded-2xl rounded-tl-md border border-[#2C303A]/50'
                     }`}
                   >
                     {msg.role === 'assistant' ? renderChatContent(msg.content) : msg.content}
@@ -696,7 +1029,7 @@ export default function AiChatPage({ stocks }: Props) {
           <div ref={bottomRef} />
         </div>
 
-        <div className="px-4 py-3 border-t border-gray-700/50 relative">
+        <div className="relative min-w-0 border-t border-gray-700/50 px-4 py-3">
           {showReviewModal && <AiReviewModal onClose={() => setShowReviewModal(false)} onSelect={handleReviewSelect} />}
           <div className="flex justify-between mb-3">
             {quickActions.map(({ icon: Icon, label, key }) => (
@@ -729,7 +1062,7 @@ export default function AiChatPage({ stocks }: Props) {
         </div>
       </div>
 
-      <div className="w-72 bg-gradient-to-br from-indigo-900/20 via-gray-900 to-blue-900/20 border-l border-gray-700/50 flex flex-col overflow-hidden">
+      <div className="w-72 flex-none bg-gradient-to-br from-indigo-900/20 via-gray-900 to-blue-900/20 border-l border-gray-700/50 flex flex-col overflow-hidden">
         {selectedReport ? (
           <>
             <div className="p-3 border-b border-gray-700/50 flex items-center justify-between">
@@ -741,8 +1074,8 @@ export default function AiChatPage({ stocks }: Props) {
                 <X size={16} />
               </button>
             </div>
-            <div className="flex-1 overflow-hidden scrollbar-thin p-3">
-              <pre className="text-xs text-neutral/90 leading-relaxed whitespace-pre-wrap font-sans">{selectedReport.content}</pre>
+            <div className="flex-1 min-w-0 overflow-auto scrollbar-thin p-3 text-xs text-neutral/90">
+              {renderChatContent(selectedReport.content)}
             </div>
           </>
         ) : (
